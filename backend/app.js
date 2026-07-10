@@ -15,6 +15,8 @@ const rankingsRouter = require('./src/routes/rankings');
 const groupsRouter = require('./src/routes/groups');
 
 const { notFound, errorHandler } = require('./src/middleware/errorHandler');
+const prisma = require('./src/models/prismaClient');
+const { redis } = require('./src/services/redis');
 
 const app = express();
 
@@ -25,8 +27,34 @@ app.use(express.urlencoded({ extended: true }));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
 // ── Health Check ───────────────────────────────────────────────────
-app.get('/health', (_req, res) => {
-  res.status(200).json({ success: true, data: { status: 'ok' }, error: '' });
+// DB·Redis를 실제로 ping해서 연결 상태를 확인
+// 어느 한쪽이 실패해도 서버 자체는 살아있으므로 HTTP 200 유지,
+// 실패한 서비스는 "disconnected"로 표기 (모니터링/알림 시스템에서 data 필드로 판단)
+app.get('/health', async (_req, res) => {
+  const [dbStatus, redisStatus] = await Promise.all([
+    // PostgreSQL ping
+    prisma.$queryRaw`SELECT 1`
+      .then(() => 'connected')
+      .catch(() => 'disconnected'),
+
+    // Redis ping
+    redis.ping()
+      .then((reply) => (reply === 'PONG' ? 'connected' : 'disconnected'))
+      .catch(() => 'disconnected'),
+  ]);
+
+  const allHealthy = dbStatus === 'connected' && redisStatus === 'connected';
+
+  return res.status(allHealthy ? 200 : 503).json({
+    success: allHealthy,
+    data: {
+      status: allHealthy ? 'ok' : 'degraded',
+      timestamp: new Date().toISOString(),
+      db: dbStatus,
+      redis: redisStatus,
+    },
+    error: allHealthy ? '' : '일부 서비스에 연결할 수 없습니다.',
+  });
 });
 
 // ── API 라우터 마운트 ──────────────────────────────────────────────

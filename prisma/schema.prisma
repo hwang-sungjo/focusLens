@@ -2,7 +2,8 @@
 // CHECK 제약은 PostgreSQL raw migration 또는 미들웨어에서 검증
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x", "debian-openssl-1.1.x"]
 }
 
 datasource db {
@@ -26,7 +27,7 @@ enum UserStatus {
 }
 
 enum SessionStatus {
-  IN_PROGRESS
+  ACTIVE
   COMPLETED
   CANCELLED
 }
@@ -78,8 +79,8 @@ enum ReactionType {
 
 enum GroupType {
   STUDY
-  TEAM
-  OPEN
+  PROJECT
+  CHALLENGE
 }
 
 enum GroupVisibility {
@@ -182,7 +183,7 @@ model sessions {
   user_id    String
   started_at DateTime
   ended_at   DateTime?
-  status     SessionStatus @default(IN_PROGRESS)
+  status     SessionStatus @default(ACTIVE)
   created_at DateTime      @default(now())
   updated_at DateTime      @updatedAt
 

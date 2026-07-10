@@ -1,0 +1,72 @@
+version: "3.9"
+
+# ── 공통 환경변수 앵커 ─────────────────────────────────────────────
+x-db-credentials: &db-credentials
+  POSTGRES_DB: focuslens
+  POSTGRES_USER: focuslens
+  POSTGRES_PASSWORD: focuslens_pw
+
+services:
+  # ── PostgreSQL ────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: focuslens_postgres
+    restart: unless-stopped
+    environment:
+      <<: *db-credentials
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U focuslens -d focuslens"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ─────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: focuslens_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Backend (Node.js + Express) ───────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: focuslens_backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      NODE_ENV: production
+      # Docker 내부 서비스명으로 HOST 덮어쓰기
+      DATABASE_URL: "postgresql://focuslens:focuslens_pw@postgres:5432/focuslens?schema=public"
+      REDIS_URL: "redis://redis:6379"
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      # Prisma 스키마를 컨테이너에서 참조할 수 있도록 마운트
+      - ./prisma:/app/prisma:ro
+
+# ── Named Volumes (데이터 영속성 보장) ────────────────────────────
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local

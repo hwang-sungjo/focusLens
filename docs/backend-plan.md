@@ -55,28 +55,28 @@
 > 📅 7/6 ~ 7/12 (1주)
 > 백엔드 서버 초기 설정, Docker 환경, DB 연결을 완료하고 팀 전체가 동일한 환경 세팅
 
-- [ ]  **Docker / docker-compose 설정**
+- [✅]  **Docker / docker-compose 설정**
     - 서비스 구성: backend + postgres + redis
     - `.env.example` 작성 및 팀 공유
-- [ ]  **Express / FastAPI 서버 초기 세팅**
+- [✅]  **Express / FastAPI 서버 초기 세팅**
     - 최종 언어 확정: Node.js + Express **또는** Python + FastAPI
     - 디렉토리 구조: `src/routes`, `src/controllers`, `src/middleware`, `src/models`
-- [ ]  **PostgreSQL 연결 & 전체 스키마 migration 실행**
+- [✅]  **PostgreSQL 연결 & 전체 스키마 migration 실행**
     - Prisma (Node) 또는 SQLAlchemy (Python) 설정
     - 코어: users, sessions, concentration_logs, reports 테이블 생성
     - 소셜: user_profiles, user_privacy_settings, user_connection_requests, user_connections, session_shares, session_reactions 테이블 생성
     - 그룹: groups, group_members, group_invitations, group_goals, group_goal_assignees, manager_feedbacks 테이블 생성
     - ERD 확정 제약조건 적용 — UNIQUE, CHECK(score BETWEEN 0 AND 100), CHECK(user_a_id <> user_b_id) 등
     - 시드 데이터(테스트 유저, 테스트 그룹) 스크립트 작성
-- [ ]  **조회용 View 초안 생성**
+- [✅]  **조회용 View 초안 생성**
     - `v_session_share_reaction_counts` — session_reactions를 session_share_id, reaction_type 기준 집계
     - `v_user_session_summaries` — sessions, concentration_logs, reports 조인 세션 요약
     - `v_group_member_stats` — 그룹 구성원별 기간별 학습 통계
     - `v_rankings` — ranking_participation=true 사용자 대상 집중도/학습시간 집계
-- [ ]  **환경변수(.env) 관리 구조 설정** — 로컬 / 개발 / 프로덕션 분리
-- [ ]  **기본 라우터 구조 생성** — 각 도메인별 라우터 파일 분리 (auth / sessions / reports / social / groups)
-- [ ]  **Health check API 확인** — `GET /health` → 200 응답
-- [ ]  **Git repo 구조 및 브랜치 규칙 팀 확인**
+- [✅]  **환경변수(.env) 관리 구조 설정** — 로컬 / 개발 / 프로덕션 분리
+- [✅]  **기본 라우터 구조 생성** — 각 도메인별 라우터 파일 분리 (auth / sessions / reports / social / groups)
+- [✅]  **Health check API 확인** — `GET /health` → 200 응답
+- [✅]  **Git repo 구조 및 브랜치 규칙 팀 확인**
 
 ---
 
