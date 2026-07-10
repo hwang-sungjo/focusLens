@@ -1,0 +1,425 @@
+// FocusLens — ERD 기반 Prisma 스키마 (docs/erd.md)
+// CHECK 제약은 PostgreSQL raw migration 또는 미들웨어에서 검증
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum SessionStatus {
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum AttentionState {
+  FOCUSED
+  NORMAL
+  DISTRACTED
+}
+
+enum SessionScope {
+  PUBLIC
+  FRIENDS
+  GROUP
+  PRIVATE
+}
+
+enum VisibilityLevel {
+  PUBLIC
+  FRIENDS
+  GROUP
+  PRIVATE
+}
+
+enum ConnectionRequestStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  CANCELLED
+}
+
+enum ShareScope {
+  PUBLIC
+  FRIENDS
+  GROUP
+}
+
+enum ShareStatus {
+  ACTIVE
+  HIDDEN
+  REMOVED
+}
+
+enum ReactionType {
+  LIKE
+  CHEER
+  EMPATHY
+}
+
+enum GroupType {
+  STUDY
+  TEAM
+  OPEN
+}
+
+enum GroupVisibility {
+  PUBLIC
+  PRIVATE
+}
+
+enum GroupStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum GroupRole {
+  OWNER
+  MANAGER
+  MEMBER
+}
+
+enum MemberStatus {
+  ACTIVE
+  PENDING
+  REMOVED
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+enum GoalStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+// ---------------------------------------------------------------------------
+// Core domain
+// ---------------------------------------------------------------------------
+
+model users {
+  id            String     @id @default(uuid())
+  email         String     @unique
+  password_hash String
+  name          String
+  role          UserRole   @default(USER)
+  status        UserStatus @default(ACTIVE)
+  created_at    DateTime   @default(now())
+  updated_at    DateTime   @updatedAt
+  deleted_at    DateTime?
+
+  user_profile              user_profiles?
+  user_privacy_settings     user_privacy_settings?
+  sessions                  sessions[]
+  connection_requests_sent  user_connection_requests[] @relation("connection_requester")
+  connection_requests_recv  user_connection_requests[] @relation("connection_receiver")
+  connections_as_a          user_connections[]           @relation("connection_user_a")
+  connections_as_b          user_connections[]           @relation("connection_user_b")
+  session_reactions         session_reactions[]
+  groups_created            groups[]                     @relation("group_creator")
+  group_members             group_members[]
+  group_invitations_invitee group_invitations[]          @relation("invitation_invitee")
+
+  @@map("users")
+}
+
+model user_profiles {
+  id                String   @id @default(uuid())
+  user_id           String   @unique
+  nickname          String   @unique
+  profile_image_url String?
+  bio               String?
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+
+  user users @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@map("user_profiles")
+}
+
+model user_privacy_settings {
+  id                     String          @id @default(uuid())
+  user_id                String          @unique
+  default_session_scope  SessionScope    @default(PRIVATE)
+  score_visibility       VisibilityLevel @default(PRIVATE)
+  study_time_visibility  VisibilityLevel @default(PRIVATE)
+  group_data_sharing     Boolean         @default(true)
+  ranking_participation  Boolean         @default(false)
+  created_at             DateTime        @default(now())
+  updated_at             DateTime        @updatedAt
+
+  user users @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@map("user_privacy_settings")
+}
+
+model sessions {
+  id         String        @id @default(uuid())
+  user_id    String
+  started_at DateTime
+  ended_at   DateTime?
+  status     SessionStatus @default(IN_PROGRESS)
+  created_at DateTime      @default(now())
+  updated_at DateTime      @updatedAt
+
+  user                users                 @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  concentration_logs  concentration_logs[]
+  report              reports?
+  session_shares      session_shares[]
+  manager_feedbacks   manager_feedbacks[]
+
+  @@index([user_id, started_at])
+  @@map("sessions")
+}
+
+model concentration_logs {
+  id              String         @id @default(uuid())
+  session_id      String
+  logged_at       DateTime
+  // CHECK: gaze_score BETWEEN 0 AND 100 — 미들웨어에서 0~100 float 검증 필수
+  gaze_score      Float
+  // CHECK: blink_score BETWEEN 0 AND 100 — 미들웨어에서 0~100 float 검증 필수
+  blink_score     Float
+  // CHECK: head_score BETWEEN 0 AND 100 — 미들웨어에서 0~100 float 검증 필수
+  head_score      Float
+  // CHECK: focus_score BETWEEN 0 AND 100 — 미들웨어에서 0~100 float 검증 필수 (POST /api/sessions/:id/log)
+  focus_score     Float
+  attention_state AttentionState
+  face_detected   Boolean
+  created_at      DateTime       @default(now())
+  updated_at      DateTime       @updatedAt
+
+  session sessions @relation(fields: [session_id], references: [id], onDelete: Cascade)
+
+  @@unique([session_id, logged_at])
+  @@index([session_id, logged_at])
+  @@map("concentration_logs")
+}
+
+model reports {
+  id           String   @id @default(uuid())
+  session_id   String   @unique
+  summary_json Json
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  session sessions @relation(fields: [session_id], references: [id], onDelete: Cascade)
+
+  @@map("reports")
+}
+
+// ---------------------------------------------------------------------------
+// Social domain
+// ---------------------------------------------------------------------------
+
+model user_connection_requests {
+  id                String                  @id @default(uuid())
+  requester_user_id String
+  receiver_user_id  String
+  status            ConnectionRequestStatus @default(PENDING)
+  created_at        DateTime                @default(now())
+  updated_at        DateTime                @updatedAt
+
+  requester users @relation("connection_requester", fields: [requester_user_id], references: [id], onDelete: Cascade)
+  receiver  users @relation("connection_receiver", fields: [receiver_user_id], references: [id], onDelete: Cascade)
+
+  // CHECK: requester_user_id <> receiver_user_id — 미들웨어에서 자기 자신 요청 차단 검증 필수
+  @@map("user_connection_requests")
+}
+
+model user_connections {
+  id         String   @id @default(uuid())
+  user_a_id  String
+  user_b_id  String
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  user_a users @relation("connection_user_a", fields: [user_a_id], references: [id], onDelete: Cascade)
+  user_b users @relation("connection_user_b", fields: [user_b_id], references: [id], onDelete: Cascade)
+
+  // CHECK: user_a_id <> user_b_id — 미들웨어에서 동일 사용자 연결 차단 검증 필수
+  @@unique([user_a_id, user_b_id])
+  @@map("user_connections")
+}
+
+model session_shares {
+  id            String      @id @default(uuid())
+  session_id    String
+  group_id      String?
+  share_scope   ShareScope
+  share_message String?
+  status        ShareStatus @default(ACTIVE)
+  created_at    DateTime    @default(now())
+  updated_at    DateTime    @updatedAt
+  deleted_at    DateTime?
+
+  session   sessions            @relation(fields: [session_id], references: [id], onDelete: Cascade)
+  group     groups?             @relation(fields: [group_id], references: [id], onDelete: SetNull)
+  reactions session_reactions[]
+
+  // UNIQUE(session_id, share_scope, group_id) — group_id NULL 시 PostgreSQL에서 중복 허용됨.
+  // PUBLIC/FRIENDS scope는 부분 UNIQUE 인덱스(raw migration) 또는 미들웨어로 중복 공유 방지 필요.
+  @@unique([session_id, share_scope, group_id])
+  @@index([session_id, share_scope, group_id])
+  @@map("session_shares")
+}
+
+model session_reactions {
+  id               String       @id @default(uuid())
+  session_share_id String
+  user_id          String
+  reaction_type    ReactionType
+  created_at       DateTime     @default(now())
+  updated_at       DateTime     @updatedAt
+
+  session_share session_shares @relation(fields: [session_share_id], references: [id], onDelete: Cascade)
+  user          users          @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([session_share_id, user_id, reaction_type])
+  @@map("session_reactions")
+}
+
+// ---------------------------------------------------------------------------
+// Group domain
+// ---------------------------------------------------------------------------
+
+model groups {
+  id                 String          @id @default(uuid())
+  created_by_user_id String
+  name               String
+  description        String?
+  group_type         GroupType       @default(STUDY)
+  visibility         GroupVisibility @default(PRIVATE)
+  status             GroupStatus     @default(ACTIVE)
+  created_at         DateTime        @default(now())
+  updated_at         DateTime        @updatedAt
+  deleted_at         DateTime?
+
+  creator           users               @relation("group_creator", fields: [created_by_user_id], references: [id], onDelete: Restrict)
+  group_members     group_members[]
+  session_shares    session_shares[]
+  group_invitations group_invitations[]
+  group_goals       group_goals[]
+  manager_feedbacks manager_feedbacks[]
+
+  @@map("groups")
+}
+
+model group_members {
+  id         String       @id @default(uuid())
+  group_id   String
+  user_id    String
+  group_role GroupRole    @default(MEMBER)
+  status     MemberStatus @default(ACTIVE)
+  joined_at  DateTime     @default(now())
+  created_at DateTime     @default(now())
+  updated_at DateTime     @updatedAt
+
+  group                    groups                @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  user                     users                 @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  invitations_sent         group_invitations[]   @relation("invitation_inviter")
+  goals_created            group_goals[]         @relation("goal_creator")
+  goal_assignments         group_goal_assignees[]
+  feedbacks_received       manager_feedbacks[]   @relation("feedback_target")
+  feedbacks_given          manager_feedbacks[]   @relation("feedback_manager")
+
+  @@unique([group_id, user_id])
+  @@map("group_members")
+}
+
+model group_invitations {
+  id                String           @id @default(uuid())
+  group_id          String
+  inviter_member_id String
+  invitee_email     String?
+  invitee_user_id   String?
+  invite_code       String           @unique
+  status            InvitationStatus @default(PENDING)
+  expires_at        DateTime
+  created_at        DateTime         @default(now())
+  updated_at        DateTime         @updatedAt
+
+  group          groups        @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  inviter_member group_members @relation("invitation_inviter", fields: [inviter_member_id], references: [id], onDelete: Cascade)
+  invitee_user   users?        @relation("invitation_invitee", fields: [invitee_user_id], references: [id], onDelete: SetNull)
+
+  @@map("group_invitations")
+}
+
+model group_goals {
+  id                    String     @id @default(uuid())
+  group_id              String
+  created_by_member_id  String
+  title                 String
+  description           String?
+  target_study_minutes  Int?
+  // CHECK: target_focus_score BETWEEN 0 AND 100 — 미들웨어에서 0~100 float 검증 권장
+  target_focus_score    Float?
+  start_date            DateTime   @db.Date
+  end_date              DateTime   @db.Date
+  status                GoalStatus @default(ACTIVE)
+  created_at            DateTime   @default(now())
+  updated_at            DateTime   @updatedAt
+
+  group         groups                 @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  created_by    group_members          @relation("goal_creator", fields: [created_by_member_id], references: [id], onDelete: Restrict)
+  assignees     group_goal_assignees[]
+
+  @@map("group_goals")
+}
+
+model group_goal_assignees {
+  id              String   @id @default(uuid())
+  group_goal_id   String
+  group_member_id String
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  group_goal   group_goals   @relation(fields: [group_goal_id], references: [id], onDelete: Cascade)
+  group_member group_members @relation(fields: [group_member_id], references: [id], onDelete: Cascade)
+
+  @@unique([group_goal_id, group_member_id])
+  @@map("group_goal_assignees")
+}
+
+model manager_feedbacks {
+  id                 String   @id @default(uuid())
+  group_id           String
+  target_member_id   String
+  manager_member_id  String
+  session_id         String?
+  content            String
+  created_at         DateTime @default(now())
+  updated_at         DateTime @updatedAt
+
+  group           groups        @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  target_member   group_members @relation("feedback_target", fields: [target_member_id], references: [id], onDelete: Cascade)
+  manager_member  group_members @relation("feedback_manager", fields: [manager_member_id], references: [id], onDelete: Cascade)
+  session         sessions?     @relation(fields: [session_id], references: [id], onDelete: SetNull)
+
+  @@map("manager_feedbacks")
+}
