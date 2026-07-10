@@ -1,0 +1,19 @@
+{
+  "name": "focuslens",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "test": "jest"
+  },
+  "jest": {
+    "testMatch": [
+      "**/*.test.js"
+    ],
+    "roots": [
+      "<rootDir>/src"
+    ]
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
+}

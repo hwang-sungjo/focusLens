@@ -1,0 +1,30 @@
+## cursor rules
+.agents/
+.cursorrules
+
+# env
+.env
+.env.local
+.env.production
+
+## dependencies
+node_modules/
+
+# build
+dist/
+build/
+
+# log
+*.log
+npm-debug.log*
+
+# os
+.DS_Store
+Thumbs.db
+
+# ide
+.vscode/
+.idea/
+
+# tmp
+src/
