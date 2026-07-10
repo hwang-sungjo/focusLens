@@ -22,7 +22,7 @@ main ─────────────────────────
   │                    ▲
   │                    │ hotfix/xxx (PR → main, 이후 develop 동기화)
   ▼                    │
-develop ─────────────────────────────────► (통합)
+develop, uiux, ai ───────────────────-────► (통합)
   │
   ├── feature/auth-login
   ├── feature/session-start
@@ -31,7 +31,7 @@ develop ────────────────────────
 
 ### feature 브랜치 네이밍
 
-형식: `feature/{도메인}-{기능}` (kebab-case)
+형식: `feature/{도메인}-{기능}`
 
 | 예시 | 설명 |
 | --- | --- |
@@ -41,7 +41,7 @@ develop ────────────────────────
 
 ### hotfix 브랜치 네이밍
 
-형식: `hotfix/{이슈-요약}` (kebab-case)
+형식: `hotfix/{이슈-요약}`
 
 | 예시 | 설명 |
 | --- | --- |

@@ -3,7 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "test": "jest"
+    "test": "jest",
+    "db:migrate": "cd backend && npx prisma migrate dev --schema=../prisma/schema.prisma",
+    "db:seed": "cd backend && node ../prisma/seed.js",
+    "db:reset": "cd backend && npx prisma migrate reset --schema=../prisma/schema.prisma --force",
+    "db:views": "docker exec -i focuslens_postgres psql -U focuslens -d focuslens < prisma/views.sql"
+  },
+  "prisma": {
+    "seed": "node prisma/seed.js"
   },
   "jest": {
     "testMatch": [
@@ -14,6 +21,10 @@
     ]
   },
   "devDependencies": {
-    "jest": "^29.7.0"
+    "jest": "^29.7.0",
+    "prisma": "^5.22.0"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.22.0"
   }
 }

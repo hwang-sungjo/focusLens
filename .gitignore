@@ -2,29 +2,43 @@
 .agents/
 .cursorrules
 
-# env
+# ── env ──────────────────────────────────────────────────────────
+# .env.example 은 커밋 대상 / 실제 .env 파일들은 제외
 .env
 .env.local
 .env.production
+.env.*.local
 
-## dependencies
+# ── dependencies ──────────────────────────────────────────────────
 node_modules/
 
-# build
+# ── build / dist ──────────────────────────────────────────────────
 dist/
 build/
 
-# log
+# ── logs ──────────────────────────────────────────────────────────
 *.log
 npm-debug.log*
+logs/
 
-# os
+# ── os ────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 
-# ide
+# ── ide ───────────────────────────────────────────────────────────
 .vscode/
 .idea/
 
-# tmp
-src/
+# ── tmp / test artifacts ──────────────────────────────────────────
+tmp/
+coverage/
+
+# ── Docker ────────────────────────────────────────────────────────
+# docker-compose.yml 은 커밋 대상
+# 로컬 override 파일만 제외
+docker-compose.override.yml
+
+# ── Prisma ────────────────────────────────────────────────────────
+# prisma/migrations 는 팀 공유 필요 → 커밋 대상 (제외 안 함)
+# 생성된 클라이언트 캐시만 제외
+backend/node_modules/
