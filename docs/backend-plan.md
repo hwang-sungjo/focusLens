@@ -34,11 +34,11 @@
 - [✅]  **집중도 점수 산정 기준 협의** — `S = (Gaze × 0.4) + (Blink × 0.3) + (Head × 0.3)` 가중치 확정 → `docs/api-spec.md`, `src/utils/focusScore.js`
 - [✅]  **프라이버시 설정 정책 설계** — default_session_scope (PUBLIC / FRIENDS / GROUP / PRIVATE), score_visibility, study_time_visibility, ranking_participation 옵션 정의 → `docs/api-spec.md`, `docs/feature-spec.md`, `prisma/schema.prisma`
 - [✅]  **랭킹 집계 기준 협의** — 집계 대상(ranking_participation=true인 사용자), 기간(일간/주간), 지표(평균 집중도 / 총 학습시간) 확정 → `docs/api-spec.md` §7
-- [ ]  **ERD 최종 확정 (팀 리뷰)**
+- [✅]  **ERD 최종 확정 (팀 리뷰)**
 
 [FocusLens_ERD_최종점검.pdf](%EB%B0%B1%EC%97%94%EB%93%9C%20%EC%84%B8%EB%B6%80%20%EC%9D%BC%EC%A0%95%20%EB%B0%8F%20%EA%B5%AC%ED%98%84%20%EA%B3%84%ED%9A%8D/FocusLens_ERD_%E1%84%8E%E1%85%AC%E1%84%8C%E1%85%A9%E1%86%BC%E1%84%8C%E1%85%A5%E1%86%B7%E1%84%80%E1%85%A5%E1%86%B7.pdf)
 
-- [ ]  **API 명세 팀 리뷰 & 확정** — Swagger 초안 공유 → `docs/swagger.yaml` 초안 작성 완료, **팀 리뷰·확정 대기**
+- [✅]  **API 명세 팀 리뷰 & 확정** — `docs/swagger.yaml` 팀 리뷰 및 인터페이스 합의 완료
 - [✅]  **Roll-up 전략 설계** — 30일 초과 concentration_logs → hourly_stats 집계 후 원본 삭제 / session_reactions 등 소셜 데이터 장기 보관 정책 별도 정의 → `docs/rollup-strategy.md`
 - [✅]  **보안 검증 정책 문서화** → `docs/security-policy.md`
     - ① gaze/blink/head/total: 0~100 범위 float 검증
@@ -66,14 +66,14 @@
     - 코어: users, sessions, concentration_logs, reports 테이블 생성
     - 소셜: user_profiles, user_privacy_settings, user_connection_requests, user_connections, session_shares, session_reactions 테이블 생성
     - 그룹: groups, group_members, group_invitations, group_goals, group_goal_assignees, manager_feedbacks 테이블 생성
-    - ERD 확정 제약조건 적용 — UNIQUE, CHECK(score BETWEEN 0 AND 100), CHECK(user_a_id <> user_b_id) 등
+    - ERD 확정 제약조건 적용 — UNIQUE, CHECK(score BETWEEN 0 AND 100), CHECK(user_a_id <> user_b_id) 등 → `prisma/migrations/20260815000000_add_database_check_constraints/migration.sql`
     - 시드 데이터(테스트 유저, 테스트 그룹) 스크립트 작성
 - [✅]  **조회용 View 초안 생성**
     - `v_session_share_reaction_counts` — session_reactions를 session_share_id, reaction_type 기준 집계
     - `v_user_session_summaries` — sessions, concentration_logs, reports 조인 세션 요약
     - `v_group_member_stats` — 그룹 구성원별 기간별 학습 통계
     - `v_rankings` — ranking_participation=true 사용자 대상 집중도/학습시간 집계
-- [✅]  **환경변수(.env) 관리 구조 설정** — 로컬 / 개발 / 프로덕션 분리
+- [✅]  **환경변수(.env) 관리 구조 설정** — 로컬 / 개발 / 프로덕션 템플릿 분리 (`backend/.env.*.example`), 실제 비밀값은 Git 제외
 - [✅]  **기본 라우터 구조 생성** — 각 도메인별 라우터 파일 분리 (auth / sessions / reports / social / groups)
 - [✅]  **Health check API 확인** — `GET /health` → 200 응답
 - [✅]  **Git repo 구조 및 브랜치 규칙 팀 확인**

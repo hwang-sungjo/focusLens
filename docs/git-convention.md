@@ -55,12 +55,12 @@ develop, uiux, ai ───────────────────-─�
 | 브랜치 | 직접 push | 병합 방법 |
 | --- | --- | --- |
 | `main` | **금지** | PR + squash merge만 허용 |
-| `develop` | **금지** | PR + squash merge만 허용 |
+| `develop`, `uiux`, `ai` | 허용 | PR을 통해 상위 브랜치로 병합 |
 | `feature/*`, `hotfix/*` | 허용 | PR을 통해 상위 브랜치로 병합 |
 
-- `main`, `develop`에는 **직접 push하지 않는다.**
+- `main`에 **직접 push하지 않는다.**
 - 모든 변경은 Pull Request를 통해 반영한다.
-- `hotfix`는 `main`에 먼저 병합한 뒤, `develop`에도 동기화(cherry-pick 또는 merge)한다.
+- `hotfix`는 `main`에 먼저 병합하고, `develop`, `uiux`, `ai`에도 동기화(cherry-pick 또는 merge)한다.
 
 ---
 
@@ -77,9 +77,9 @@ develop, uiux, ai ───────────────────-─�
 
 | 소스 브랜치 | 대상 브랜치 |
 | --- | --- |
-| `feature/*` | `각각의 개발 브랜치` |
-| `hotfix/*` | `main` (이후 `개발 브랜치` 동기화) |
-| `개발 브랜치` (릴리스) | `main` |
+| `feature/*` | `각각의 브랜치` |
+| `hotfix/*` | `main` (이후 `각각의 브랜치` 동기화) |
+| `각각의 브랜치` | `main` |
 
 ### Squash merge 커밋 메시지 예시
 
@@ -98,6 +98,7 @@ feat: add session start API
 
 | prefix | 용도 |
 | --- | --- |
+| `Init` | 초기 설정 |
 | `feat` | 새 기능 추가 |
 | `fix` | 버그 수정 |
 | `docs` | 문서 변경 |
@@ -108,6 +109,7 @@ feat: add session start API
 ### 예시
 
 ```
+Init: initial Commit
 feat: add JWT login endpoint
 fix: reject duplicate concentration log within 1 minute
 docs: add API spec for group endpoints
@@ -123,11 +125,3 @@ chore: configure jest in package.json
 - 하나의 커밋은 **하나의 논리적 변경**만 포함
 
 ---
-
-## 5. 작업 흐름 요약 (예시)
-
-1. `develop`에서 `feature/xxx` 브랜치 생성
-2. 작업 후 커밋 (prefix 컨벤션 준수)
-3. `develop` 대상 PR 생성 → **1인 리뷰** → **squash merge**
-4. 릴리스 시 `develop` → `main` PR
-5. 긴급 수정 시 `main`에서 `hotfix/xxx` 생성 → `main` PR → `develop` 동기화

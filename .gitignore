@@ -1,12 +1,15 @@
 ## cursor rules
 .agents/
 .cursorrules
+AGENTS.md
 
 # ── env ──────────────────────────────────────────────────────────
 # .env.example 은 커밋 대상 / 실제 .env 파일들은 제외
 .env
 .env.local
+.env.development
 .env.production
+.env.test
 .env.*.local
 
 # ── dependencies ──────────────────────────────────────────────────

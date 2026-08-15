@@ -48,7 +48,7 @@
 
 ### ① gaze / blink / head / total: 0~100 범위 float 검증
 
-ERD: `concentration_logs` — `gaze_score`, `blink_score`, `head_score`, `focus_score` (CHECK는 DB 미적용, 앱에서 검증)
+ERD: `concentration_logs` — `gaze_score`, `blink_score`, `head_score`, `focus_score` (PostgreSQL CHECK와 앱 미들웨어에서 이중 검증)
 
 | 항목 | 내용 |
 | --- | --- |
