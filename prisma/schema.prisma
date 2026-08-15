@@ -1,5 +1,5 @@
 // FocusLens — ERD 기반 Prisma 스키마 (docs/erd.md)
-// CHECK 제약은 PostgreSQL raw migration 또는 미들웨어에서 검증
+// Prisma가 표현하지 못하는 CHECK 제약은 PostgreSQL raw migration에서 강제하고 미들웨어에서도 검증
 
 generator client {
   provider      = "prisma-client-js"
@@ -201,13 +201,13 @@ model concentration_logs {
   id              String         @id @default(uuid())
   session_id      String
   logged_at       DateTime
-  // CHECK: gaze_score BETWEEN 0 AND 100 — 미들웨어에서 0~100 float 검증 필수
+  // DB CHECK + 미들웨어: gaze_score BETWEEN 0 AND 100
   gaze_score      Float
-  // CHECK: blink_score BETWEEN 0 AND 100 — 미들웨어에서 0~100 float 검증 필수
+  // DB CHECK + 미들웨어: blink_score BETWEEN 0 AND 100
   blink_score     Float
-  // CHECK: head_score BETWEEN 0 AND 100 — 미들웨어에서 0~100 float 검증 필수
+  // DB CHECK + 미들웨어: head_score BETWEEN 0 AND 100
   head_score      Float
-  // CHECK: focus_score BETWEEN 0 AND 100 — 미들웨어에서 0~100 float 검증 필수 (POST /api/sessions/:id/log)
+  // DB CHECK + 미들웨어: focus_score BETWEEN 0 AND 100
   focus_score     Float
   attention_state AttentionState
   face_detected   Boolean
@@ -248,7 +248,7 @@ model user_connection_requests {
   requester users @relation("connection_requester", fields: [requester_user_id], references: [id], onDelete: Cascade)
   receiver  users @relation("connection_receiver", fields: [receiver_user_id], references: [id], onDelete: Cascade)
 
-  // CHECK: requester_user_id <> receiver_user_id — 미들웨어에서 자기 자신 요청 차단 검증 필수
+  // DB CHECK + 미들웨어: requester_user_id <> receiver_user_id
   @@map("user_connection_requests")
 }
 
@@ -262,7 +262,7 @@ model user_connections {
   user_a users @relation("connection_user_a", fields: [user_a_id], references: [id], onDelete: Cascade)
   user_b users @relation("connection_user_b", fields: [user_b_id], references: [id], onDelete: Cascade)
 
-  // CHECK: user_a_id <> user_b_id — 미들웨어에서 동일 사용자 연결 차단 검증 필수
+  // DB CHECK + 미들웨어: user_a_id <> user_b_id
   @@unique([user_a_id, user_b_id])
   @@map("user_connections")
 }
@@ -378,7 +378,7 @@ model group_goals {
   title                 String
   description           String?
   target_study_minutes  Int?
-  // CHECK: target_focus_score BETWEEN 0 AND 100 — 미들웨어에서 0~100 float 검증 권장
+  // DB CHECK + 미들웨어: target_focus_score IS NULL OR BETWEEN 0 AND 100
   target_focus_score    Float?
   start_date            DateTime   @db.Date
   end_date              DateTime   @db.Date
