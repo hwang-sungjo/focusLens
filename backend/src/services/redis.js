@@ -1,6 +1,7 @@
 // src/services/redis.js
 // Redis 클라이언트 싱글턴 — JWT 블랙리스트, 중복 전송 차단용 캐시
 const Redis = require('ioredis');
+const { createHash } = require('crypto');
 
 const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
   lazyConnect: true,
@@ -21,8 +22,11 @@ redis.on('error', (err) => console.error('[Redis] 연결 오류:', err.message))
  * @param {string} token - 무효화할 JWT
  * @param {number} ttlSeconds - 만료 시간(초), JWT 남은 유효기간과 일치시킴
  */
+const tokenBlacklistKey = (token) =>
+  `blacklist:${createHash('sha256').update(token).digest('hex')}`;
+
 const blacklistToken = async (token, ttlSeconds) => {
-  await redis.set(`bl:${token}`, '1', 'EX', ttlSeconds);
+  await redis.set(tokenBlacklistKey(token), '1', 'EX', ttlSeconds);
 };
 
 /**
@@ -31,33 +35,28 @@ const blacklistToken = async (token, ttlSeconds) => {
  * @returns {Promise<boolean>}
  */
 const isTokenBlacklisted = async (token) => {
-  const result = await redis.get(`bl:${token}`);
+  const result = await redis.get(tokenBlacklistKey(token));
   return result !== null;
 };
 
 /**
- * 세션 로그 마지막 전송 시각 저장 (1분 중복 방지)
+ * 세션 로그 전송 잠금 획득 (1분 중복 방지)
  * @param {string} sessionId
  * @param {number} ttlSeconds
  */
-const setLastLogTime = async (sessionId, ttlSeconds = 60) => {
-  await redis.set(`log:${sessionId}`, Date.now().toString(), 'EX', ttlSeconds);
+const acquireLogRateLimit = async (sessionId, ttlSeconds = 60) => {
+  const result = await redis.set(`session-log-rate:${sessionId}`, '1', 'EX', ttlSeconds, 'NX');
+  return result === 'OK';
 };
 
-/**
- * 세션 로그 마지막 전송 시각 조회
- * @param {string} sessionId
- * @returns {Promise<number|null>}
- */
-const getLastLogTime = async (sessionId) => {
-  const val = await redis.get(`log:${sessionId}`);
-  return val ? parseInt(val, 10) : null;
+const releaseLogRateLimit = async (sessionId) => {
+  await redis.del(`session-log-rate:${sessionId}`);
 };
 
 module.exports = {
   redis,
   blacklistToken,
   isTokenBlacklisted,
-  setLastLogTime,
-  getLastLogTime,
+  acquireLogRateLimit,
+  releaseLogRateLimit,
 };

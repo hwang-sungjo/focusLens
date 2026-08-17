@@ -27,7 +27,7 @@ enum UserStatus {
 }
 
 enum SessionStatus {
-  ACTIVE
+  IN_PROGRESS
   COMPLETED
   CANCELLED
 }
@@ -183,7 +183,7 @@ model sessions {
   user_id    String
   started_at DateTime
   ended_at   DateTime?
-  status     SessionStatus @default(ACTIVE)
+  status     SessionStatus @default(IN_PROGRESS)
   created_at DateTime      @default(now())
   updated_at DateTime      @updatedAt
 

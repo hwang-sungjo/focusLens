@@ -8,9 +8,12 @@ const { isTokenBlacklisted } = require('../services/redis');
  * 실패 시 401 응답 반환
  */
 const authenticate = async (req, res, next) => {
+  let payload;
+  let token;
+
   try {
     const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    if (!authHeader || !/^Bearer\s+\S+$/.test(authHeader)) {
       return res.status(401).json({
         success: false,
         data: {},
@@ -18,22 +21,12 @@ const authenticate = async (req, res, next) => {
       });
     }
 
-    const token = authHeader.split(' ')[1];
+    token = authHeader.slice('Bearer '.length).trim();
+    payload = jwt.verify(token, process.env.JWT_SECRET);
 
-    // Redis 블랙리스트 확인 (로그아웃된 토큰 차단)
-    const blacklisted = await isTokenBlacklisted(token).catch(() => false);
-    if (blacklisted) {
-      return res.status(401).json({
-        success: false,
-        data: {},
-        error: '이미 로그아웃된 토큰입니다.',
-      });
+    if (!payload.sub) {
+      return res.status(401).json({ success: false, data: {}, error: '유효하지 않은 토큰입니다.' });
     }
-
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = payload; // { sub: userId, email, iat, exp }
-    req.token = token;  // 로그아웃 시 블랙리스트 등록에 사용
-    next();
   } catch (err) {
     if (err.name === 'TokenExpiredError') {
       return res.status(401).json({
@@ -47,6 +40,23 @@ const authenticate = async (req, res, next) => {
       data: {},
       error: '유효하지 않은 토큰입니다.',
     });
+  }
+
+  try {
+    const blacklisted = await isTokenBlacklisted(token);
+    if (blacklisted) {
+      return res.status(401).json({
+        success: false,
+        data: {},
+        error: '이미 로그아웃된 토큰입니다.',
+      });
+    }
+
+    req.user = payload;
+    req.token = token;
+    return next();
+  } catch (err) {
+    return next(err);
   }
 };
 
