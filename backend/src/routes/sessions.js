@@ -1,11 +1,19 @@
 // src/routes/sessions.js
 const { Router } = require('express');
-const { body, param } = require('express-validator');
+const { body, param, query } = require('express-validator');
 const { validate } = require('../middleware/validate');
 const { authenticate } = require('../middleware/auth');
 const sessionsController = require('../controllers/sessionsController');
 
 const router = Router();
+
+const scoreBody = (field) =>
+  body(field).custom((value) => {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100) {
+      throw new Error(`${field}는 0~100 범위의 숫자여야 합니다.`);
+    }
+    return true;
+  });
 
 // 모든 세션 라우트는 JWT 인증 필요
 router.use(authenticate);
@@ -18,10 +26,14 @@ router.post(
   '/:id/log',
   [
     param('id').isUUID().withMessage('유효한 세션 ID가 아닙니다.'),
-    body('gaze_score').isFloat({ min: 0, max: 100 }).withMessage('gaze_score는 0~100 사이 숫자여야 합니다.'),
-    body('blink_score').isFloat({ min: 0, max: 100 }).withMessage('blink_score는 0~100 사이 숫자여야 합니다.'),
-    body('head_score').isFloat({ min: 0, max: 100 }).withMessage('head_score는 0~100 사이 숫자여야 합니다.'),
-    body('face_detected').isBoolean().withMessage('face_detected는 boolean이어야 합니다.'),
+    scoreBody('gaze'),
+    scoreBody('blink'),
+    scoreBody('head'),
+    scoreBody('total'),
+    body('face_detected')
+      .optional()
+      .custom((value) => typeof value === 'boolean')
+      .withMessage('face_detected는 boolean이어야 합니다.'),
   ],
   validate,
   sessionsController.logConcentration,
@@ -36,7 +48,16 @@ router.post(
 );
 
 // GET /api/sessions  — 내 세션 목록
-router.get('/', sessionsController.getSessions);
+router.get(
+  '/',
+  [
+    query('page').optional().isInt({ min: 1 }),
+    query('limit').optional().isInt({ min: 1, max: 100 }),
+    query('status').optional().isIn(['IN_PROGRESS', 'COMPLETED', 'CANCELLED']),
+  ],
+  validate,
+  sessionsController.getSessions,
+);
 
 // GET /api/sessions/:id  — 세션 상세 (분 단위 타임라인 포함)
 router.get(

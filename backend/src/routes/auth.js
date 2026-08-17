@@ -14,6 +14,11 @@ router.post(
     body('email').isEmail().withMessage('유효한 이메일을 입력해주세요.'),
     body('password').isLength({ min: 8 }).withMessage('비밀번호는 8자 이상이어야 합니다.'),
     body('name').notEmpty().withMessage('이름은 필수입니다.'),
+    body('nickname')
+      .isString()
+      .trim()
+      .isLength({ min: 2, max: 30 })
+      .withMessage('닉네임은 2~30자여야 합니다.'),
   ],
   validate,
   authController.register,

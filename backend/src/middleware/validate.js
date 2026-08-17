@@ -10,13 +10,19 @@ const { validationResult } = require('express-validator');
 const validate = (req, res, next) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
+    const reason = errors
+      .array()
+      .map((e) => `${e.path}: ${e.msg}`)
+      .join(', ');
+
+    console.warn(
+      `[Validation] user_id=${req.user?.sub || 'anonymous'} path=${req.method} ${req.originalUrl} reason=${reason}`,
+    );
+
     return res.status(400).json({
       success: false,
       data: {},
-      error: errors
-        .array()
-        .map((e) => `${e.path}: ${e.msg}`)
-        .join(', '),
+      error: reason,
     });
   }
   next();

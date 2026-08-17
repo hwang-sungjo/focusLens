@@ -86,49 +86,51 @@
 
 ### 3-1. 인증 및 코어 기능
 
-- [ ]  **JWT 인증 미들웨어 구현**
+> ✅ 완료 재검증 (2026-08-17): Prisma schema/migration 검증, Jest 11/11, PostgreSQL·Redis 연동 E2E 27/27 통과
+
+- [✅]  **JWT 인증 미들웨어 구현**
     - 모든 보호된 라우트에 적용
     - 유효하지 않은 토큰 → 401 응답
-- [ ]  **회원가입 API** — `POST /api/auth/register`
+- [✅]  **회원가입 API** — `POST /api/auth/register`
     - bcrypt 비밀번호 해싱
     - 이메일 중복 검사
     - 가입 시 user_profiles, user_privacy_settings 기본값 자동 생성 (default_session_scope=PRIVATE, ranking_participation=false)
-- [ ]  **로그인 API** — `POST /api/auth/login`
+- [✅]  **로그인 API** — `POST /api/auth/login`
     - JWT access token 발급 (만료 1시간)
     - bcrypt 비밀번호 검증
-- [ ]  **로그아웃 API** — `POST /api/auth/logout`
+- [✅]  **로그아웃 API** — `POST /api/auth/logout`
     - Redis 블랙리스트 또는 DB 토큰 무효화
-- [ ]  **DB 스키마 구현** — 최종 확정된 ERD 기반 migration 실행
-- [ ]  **세션 시작 API** — `POST /api/sessions/start`
-    - Request: `{ user_id }`
+- [✅]  **DB 스키마 구현** — 최종 확정된 ERD 기반 migration 실행
+- [✅]  **세션 시작 API** — `POST /api/sessions/start`
+    - Request: `{}` (`user_id`는 JWT `sub`에서 추출)
     - Response: `201 + session_id`
-- [ ]  **세션 종료 API** — `POST /api/sessions/:id/end`
+- [✅]  **세션 종료 API** — `POST /api/sessions/:id/end`
     - avg_score는 sessions에 저장하지 않고 리포트/조회 API에서 concentration_logs로 산출
     - report 자동 생성 트리거 (summary_json에 gaze/blink/head 분리 통계 포함)
     - Response: `200 + report_id`
-- [ ]  **집중도 로그 저장 API** — `POST /api/sessions/:id/log`
+- [✅]  **집중도 로그 저장 API** — `POST /api/sessions/:id/log`
     - Request: `{ gaze, blink, head, total }`
     - Response: `200`
-- [ ]  **보안 검증 4조건 구현**
+- [✅]  **보안 검증 4조건 구현**
     - ① 점수 범위 검증 (0~100 float)
     - ② session_id 소유자 검증 (JWT sub 매칭)
     - ③ 1분 미만 중복 전송 차단
     - ④ 검증 실패 시 400/403 응답 + 로그 기록
-- [ ]  **분당 1회 요청 제한 로직** 구현
-- [ ]  **세션 평균 집중도 계산 로직** 구현 (concentration_logs 집계 기반, sessions 컬럼 저장 없음)
-- [ ]  **개별 세션 상세 조회** — `GET /api/sessions/:id`
+- [✅]  **분당 1회 요청 제한 로직** 구현
+- [✅]  **세션 평균 집중도 계산 로직** 구현 (concentration_logs 집계 기반, sessions 컬럼 저장 없음)
+- [✅]  **개별 세션 상세 조회** — `GET /api/sessions/:id`
     - 분 단위 집중도 타임라인 포함
-- [ ]  **전체 세션 목록 조회** — `GET /api/sessions`
+- [✅]  **전체 세션 목록 조회** — `GET /api/sessions`
     - 사용자별 세션 리스트, 최신순 정렬
-- [ ]  **세션별 집중도 리포트 조회** — `GET /api/reports/:session_id`
+- [✅]  **세션별 집중도 리포트 조회** — `GET /api/reports/:session_id`
     - 분 단위 타임라인 + gaze/blink/head 분리 통계 + 요약
-- [ ]  **주간 집중도 요약 API** — `GET /api/reports/weekly`
+- [✅]  **주간 집중도 요약 API** — `GET /api/reports/weekly`
     - 최근 7일 일별 평균 집중도
-- [ ]  **월간 집중도 API** — `GET /api/reports/monthly` (선택)
+- [✅]  **월간 집중도 API** — `GET /api/reports/monthly` (선택)
 
 ### 3-2. 소셜 네트워킹 기능
 
-- [ ]  **프로필 조회/수정 API**
+- [✅]  **프로필 조회/수정 API**
     - `GET /api/users/:id/profile` — 공개 프로필 (nickname, bio, profile_image_url)
     - `PATCH /api/users/me/profile` — 내 프로필 수정
 - [ ]  **프라이버시 설정 조회/수정 API**
@@ -152,7 +154,7 @@
 - [ ]  **공감 반응 API** — `POST /api/session-shares/:id/reactions`
     - reaction_type: LIKE / CHEER / EMPATHY
     - UNIQUE(session_share_id, user_id, reaction_type) 중복 반응 차단
-- [ ]  **공감 반응 취소 API** — `DELETE /api/session-shares/:id/reactions/:reactionType`
+- [✅]  **공감 반응 취소 API** — `DELETE /api/session-shares/:id/reactions/:reactionType`
 - [ ]  **랭킹 조회 API** — `GET /api/rankings`
     - 쿼리 파라미터: `scope` (global / friends / group), `period` (daily / weekly), `metric` (focus_score / study_time)
     - ranking_participation=false 사용자 제외
@@ -197,9 +199,9 @@
 
 ### 3-4. 공통
 
-- [ ]  **전역 예외 처리 미들웨어** — 400 / 403 / 404 / 500 응답 표준화
+- [✅]  **전역 예외 처리 미들웨어** — 400 / 403 / 404 / 500 응답 표준화
 - [ ]  **Swagger 문서 정리** — 전체 API 엔드포인트 명세 완성
-- [ ]  **프론트엔드 팀 API 연동 지원** — CORS 설정, 응답 포맷 통일
+- [✅]  **프론트엔드 팀 API 연동 지원** — CORS 설정, 응답 포맷 통일
 
 ---
 
