@@ -1,6 +1,6 @@
 // src/routes/connections.js
 const { Router } = require('express');
-const { body, param } = require('express-validator');
+const { body, param, query } = require('express-validator');
 const { validate } = require('../middleware/validate');
 const { authenticate } = require('../middleware/auth');
 const connectionsController = require('../controllers/connectionsController');
@@ -23,14 +23,24 @@ router.patch(
   [
     param('id').isUUID().withMessage('유효한 요청 ID가 아닙니다.'),
     body('status')
-      .isIn(['ACCEPTED', 'REJECTED'])
-      .withMessage('status는 ACCEPTED 또는 REJECTED이어야 합니다.'),
+      .isIn(['ACCEPTED', 'REJECTED', 'CANCELLED'])
+      .withMessage('status는 ACCEPTED, REJECTED, CANCELLED 중 하나여야 합니다.'),
   ],
   validate,
   connectionsController.respondRequest,
 );
 
-// GET /api/connections  — 친구 목록 조회
-router.get('/', connectionsController.getConnections);
+// GET /api/connections  — 친구 목록 및 대기 요청 조회
+router.get(
+  '/',
+  [
+    query('include_pending')
+      .optional()
+      .isIn(['true', 'false'])
+      .withMessage('include_pending은 true 또는 false여야 합니다.'),
+  ],
+  validate,
+  connectionsController.getConnections,
+);
 
 module.exports = router;

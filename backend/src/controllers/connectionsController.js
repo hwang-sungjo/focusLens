@@ -13,26 +13,53 @@ const sendRequest = async (req, res, next) => {
       return res.status(400).json({ success: false, data: {}, error: '자기 자신에게 친구 요청을 보낼 수 없습니다.' });
     }
 
-    // 이미 연결된 관계 중복 요청 차단
-    const existing = await prisma.user_connection_requests.findFirst({
+    const receiver = await prisma.users.findFirst({
+      where: { id: receiver_user_id, status: 'ACTIVE', deleted_at: null },
+      select: { id: true },
+    });
+    if (!receiver) return next(createError('대상 사용자를 찾을 수 없습니다.', 404));
+
+    const [userAId, userBId] = [requesterId, receiver_user_id].sort();
+    const connection = await prisma.user_connections.findUnique({
+      where: { user_a_id_user_b_id: { user_a_id: userAId, user_b_id: userBId } },
+      select: { id: true },
+    });
+    if (connection) return next(createError('이미 친구 관계입니다.', 409));
+
+    const pendingRequest = await prisma.user_connection_requests.findFirst({
       where: {
         OR: [
           { requester_user_id: requesterId, receiver_user_id },
           { requester_user_id: receiver_user_id, receiver_user_id: requesterId },
         ],
-        status: { in: ['PENDING', 'ACCEPTED'] },
+        status: 'PENDING',
       },
+      select: { id: true },
     });
-    if (existing) {
-      return res.status(409).json({ success: false, data: {}, error: '이미 연결 요청이 존재하거나 친구 관계입니다.' });
-    }
+    if (pendingRequest) return next(createError('이미 처리 대기 중인 요청이 있습니다.', 409));
 
     const request = await prisma.user_connection_requests.create({
       data: { requester_user_id: requesterId, receiver_user_id, status: 'PENDING' },
-      select: { id: true, status: true, created_at: true },
+      select: {
+        id: true,
+        requester_user_id: true,
+        receiver_user_id: true,
+        status: true,
+        created_at: true,
+      },
     });
 
-    return res.status(201).json({ success: true, data: { request }, error: '' });
+    return res.status(201).json({
+      success: true,
+      data: {
+        request_id: request.id,
+        requester_user_id: request.requester_user_id,
+        receiver_user_id: request.receiver_user_id,
+        status: request.status,
+        created_at: request.created_at,
+      },
+      error: '',
+    });
   } catch (err) {
     next(err);
   }
@@ -46,27 +73,49 @@ const respondRequest = async (req, res, next) => {
     const { status } = req.body;
 
     const connectionRequest = await prisma.user_connection_requests.findUnique({ where: { id } });
-    if (!connectionRequest) return next(createError('요청을 찾을 수 없습니다.', 404));
-    if (connectionRequest.receiver_user_id !== userId) return next(createError('권한이 없습니다.', 403));
-    if (connectionRequest.status !== 'PENDING') return next(createError('이미 처리된 요청입니다.', 400));
+    if (!connectionRequest) return next(createError('친구 요청을 찾을 수 없습니다.', 404));
+    if (connectionRequest.status !== 'PENDING') return next(createError('이미 처리된 요청입니다.', 409));
 
-    const updated = await prisma.user_connection_requests.update({
-      where: { id },
-      data: { status },
-      select: { id: true, status: true },
+    const isCancellation = status === 'CANCELLED';
+    const canProcess = isCancellation
+      ? connectionRequest.requester_user_id === userId
+      : connectionRequest.receiver_user_id === userId;
+    if (!canProcess) return next(createError('해당 요청을 처리할 권한이 없습니다.', 403));
+
+    const result = await prisma.$transaction(async (tx) => {
+      let connection = null;
+
+      if (status === 'ACCEPTED') {
+        const [userAId, userBId] = [
+          connectionRequest.requester_user_id,
+          connectionRequest.receiver_user_id,
+        ].sort();
+        connection = await tx.user_connections.upsert({
+          where: { user_a_id_user_b_id: { user_a_id: userAId, user_b_id: userBId } },
+          create: { user_a_id: userAId, user_b_id: userBId },
+          update: {},
+          select: { id: true },
+        });
+      }
+
+      const updated = await tx.user_connection_requests.update({
+        where: { id },
+        data: { status },
+        select: { id: true, status: true },
+      });
+
+      return { updated, connection };
     });
 
-    // 수락 시 user_connections에 양방향 레코드 생성
-    if (status === 'ACCEPTED') {
-      const [a, b] = [connectionRequest.requester_user_id, userId].sort();
-      await prisma.user_connections.upsert({
-        where: { user_a_id_user_b_id: { user_a_id: a, user_b_id: b } },
-        create: { user_a_id: a, user_b_id: b },
-        update: {},
-      });
-    }
-
-    return res.status(200).json({ success: true, data: { request: updated }, error: '' });
+    return res.status(200).json({
+      success: true,
+      data: {
+        request_id: result.updated.id,
+        status: result.updated.status,
+        connection_id: result.connection?.id ?? null,
+      },
+      error: '',
+    });
   } catch (err) {
     next(err);
   }
@@ -76,21 +125,94 @@ const respondRequest = async (req, res, next) => {
 const getConnections = async (req, res, next) => {
   try {
     const userId = req.user.sub;
+    const includePending = req.query.include_pending === 'true';
     const connections = await prisma.user_connections.findMany({
       where: { OR: [{ user_a_id: userId }, { user_b_id: userId }] },
+      orderBy: { created_at: 'desc' },
       include: {
-        users_user_connections_user_a_idTousers: { select: { id: true, name: true } },
-        users_user_connections_user_b_idTousers: { select: { id: true, name: true } },
+        user_a: {
+          select: {
+            id: true,
+            user_profile: { select: { nickname: true, profile_image_url: true } },
+          },
+        },
+        user_b: {
+          select: {
+            id: true,
+            user_profile: { select: { nickname: true, profile_image_url: true } },
+          },
+        },
       },
     });
 
-    const friends = connections.map((c) =>
-      c.user_a_id === userId
-        ? c.users_user_connections_user_b_idTousers
-        : c.users_user_connections_user_a_idTousers,
-    );
+    const serializedConnections = connections.map((connection) => {
+      const friend = connection.user_a_id === userId ? connection.user_b : connection.user_a;
+      return {
+        connection_id: connection.id,
+        user_id: friend.id,
+        nickname: friend.user_profile?.nickname ?? null,
+        profile_image_url: friend.user_profile?.profile_image_url ?? null,
+        connected_at: connection.created_at,
+      };
+    });
 
-    return res.status(200).json({ success: true, data: { friends }, error: '' });
+    let pendingReceived = [];
+    let pendingSent = [];
+    if (includePending) {
+      const [received, sent] = await Promise.all([
+        prisma.user_connection_requests.findMany({
+          where: { receiver_user_id: userId, status: 'PENDING' },
+          orderBy: { created_at: 'desc' },
+          include: {
+            requester: {
+              select: {
+                id: true,
+                user_profile: { select: { nickname: true, profile_image_url: true } },
+              },
+            },
+          },
+        }),
+        prisma.user_connection_requests.findMany({
+          where: { requester_user_id: userId, status: 'PENDING' },
+          orderBy: { created_at: 'desc' },
+          include: {
+            receiver: {
+              select: {
+                id: true,
+                user_profile: { select: { nickname: true, profile_image_url: true } },
+              },
+            },
+          },
+        }),
+      ]);
+
+      pendingReceived = received.map((request) => ({
+        request_id: request.id,
+        user_id: request.requester.id,
+        nickname: request.requester.user_profile?.nickname ?? null,
+        profile_image_url: request.requester.user_profile?.profile_image_url ?? null,
+        status: request.status,
+        created_at: request.created_at,
+      }));
+      pendingSent = sent.map((request) => ({
+        request_id: request.id,
+        user_id: request.receiver.id,
+        nickname: request.receiver.user_profile?.nickname ?? null,
+        profile_image_url: request.receiver.user_profile?.profile_image_url ?? null,
+        status: request.status,
+        created_at: request.created_at,
+      }));
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        connections: serializedConnections,
+        pending_received: pendingReceived,
+        pending_sent: pendingSent,
+      },
+      error: '',
+    });
   } catch (err) {
     next(err);
   }

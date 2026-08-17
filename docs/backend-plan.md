@@ -130,32 +130,34 @@
 
 ### 3-2. 소셜 네트워킹 기능
 
+> ✅ 완료 검증 (2026-08-17): Prisma schema/migration 검증, Jest 11/11, PostgreSQL·Redis 연동 E2E 81/81 통과
+
 - [✅]  **프로필 조회/수정 API**
     - `GET /api/users/:id/profile` — 공개 프로필 (nickname, bio, profile_image_url)
     - `PATCH /api/users/me/profile` — 내 프로필 수정
-- [ ]  **프라이버시 설정 조회/수정 API**
+- [✅]  **프라이버시 설정 조회/수정 API**
     - `GET /api/users/me/privacy` — 현재 공개 설정 조회
     - `PATCH /api/users/me/privacy` — 공개 범위 수정 (default_session_scope, score_visibility 등)
-- [ ]  **친구 요청 API** — `POST /api/connections/request`
+- [✅]  **친구 요청 API** — `POST /api/connections/request`
     - requester_user_id ≠ receiver_user_id 검증 (자기 자신 요청 차단)
     - 이미 연결된 관계 중복 요청 차단
-- [ ]  **친구 요청 수락/거절 API** — `PATCH /api/connections/:id`
+- [✅]  **친구 요청 수락/거절 API** — `PATCH /api/connections/:id`
     - status: ACCEPTED → user_connections에 양방향 레코드 자동 생성
     - status: REJECTED → user_connection_requests 상태 업데이트만
-- [ ]  **친구 목록 조회 API** — `GET /api/connections`
-- [ ]  **세션 공유 API** — `POST /api/session-shares`
+- [✅]  **친구 목록 조회 API** — `GET /api/connections`
+- [✅]  **세션 공유 API** — `POST /api/session-shares`
     - share_scope: PUBLIC / FRIENDS / GROUP 선택
     - GROUP 공유 시 group_id 필수
     - user_privacy_settings.default_session_scope 초과 공개 차단
-- [ ]  **소셜 피드 조회 API** — `GET /api/session-shares/feed`
+- [✅]  **소셜 피드 조회 API** — `GET /api/session-shares/feed`
     - 친구 공개 세션 + 전체 공개 세션 통합 조회
     - v_session_share_reaction_counts View를 통해 공감 개수 포함
     - 조회 대상 세션 소유자의 score_visibility / study_time_visibility 준수
-- [ ]  **공감 반응 API** — `POST /api/session-shares/:id/reactions`
+- [✅]  **공감 반응 API** — `POST /api/session-shares/:id/reactions`
     - reaction_type: LIKE / CHEER / EMPATHY
     - UNIQUE(session_share_id, user_id, reaction_type) 중복 반응 차단
 - [✅]  **공감 반응 취소 API** — `DELETE /api/session-shares/:id/reactions/:reactionType`
-- [ ]  **랭킹 조회 API** — `GET /api/rankings`
+- [✅]  **랭킹 조회 API** — `GET /api/rankings`
     - 쿼리 파라미터: `scope` (global / friends / group), `period` (daily / weekly), `metric` (focus_score / study_time)
     - ranking_participation=false 사용자 제외
     - v_rankings View 기반 집계
