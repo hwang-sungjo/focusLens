@@ -86,7 +86,7 @@
 
 ### 3-1. 인증 및 코어 기능
 
-- [ ]  **JWT 인증 미들웨어 구현**
+- [✅]  **JWT 인증 미들웨어 구현**
     - 모든 보호된 라우트에 적용
     - 유효하지 않은 토큰 → 401 응답
 - [ ]  **회원가입 API** — `POST /api/auth/register`
@@ -98,7 +98,7 @@
     - bcrypt 비밀번호 검증
 - [ ]  **로그아웃 API** — `POST /api/auth/logout`
     - Redis 블랙리스트 또는 DB 토큰 무효화
-- [ ]  **DB 스키마 구현** — 최종 확정된 ERD 기반 migration 실행
+- [✅]  **DB 스키마 구현** — 최종 확정된 ERD 기반 migration 실행
 - [ ]  **세션 시작 API** — `POST /api/sessions/start`
     - Request: `{ user_id }`
     - Response: `201 + session_id`
@@ -114,8 +114,8 @@
     - ② session_id 소유자 검증 (JWT sub 매칭)
     - ③ 1분 미만 중복 전송 차단
     - ④ 검증 실패 시 400/403 응답 + 로그 기록
-- [ ]  **분당 1회 요청 제한 로직** 구현
-- [ ]  **세션 평균 집중도 계산 로직** 구현 (concentration_logs 집계 기반, sessions 컬럼 저장 없음)
+- [✅]  **분당 1회 요청 제한 로직** 구현
+- [✅]  **세션 평균 집중도 계산 로직** 구현 (concentration_logs 집계 기반, sessions 컬럼 저장 없음)
 - [ ]  **개별 세션 상세 조회** — `GET /api/sessions/:id`
     - 분 단위 집중도 타임라인 포함
 - [ ]  **전체 세션 목록 조회** — `GET /api/sessions`
@@ -128,7 +128,7 @@
 
 ### 3-2. 소셜 네트워킹 기능
 
-- [ ]  **프로필 조회/수정 API**
+- [✅]  **프로필 조회/수정 API**
     - `GET /api/users/:id/profile` — 공개 프로필 (nickname, bio, profile_image_url)
     - `PATCH /api/users/me/profile` — 내 프로필 수정
 - [ ]  **프라이버시 설정 조회/수정 API**
@@ -152,7 +152,7 @@
 - [ ]  **공감 반응 API** — `POST /api/session-shares/:id/reactions`
     - reaction_type: LIKE / CHEER / EMPATHY
     - UNIQUE(session_share_id, user_id, reaction_type) 중복 반응 차단
-- [ ]  **공감 반응 취소 API** — `DELETE /api/session-shares/:id/reactions/:reactionType`
+- [✅]  **공감 반응 취소 API** — `DELETE /api/session-shares/:id/reactions/:reactionType`
 - [ ]  **랭킹 조회 API** — `GET /api/rankings`
     - 쿼리 파라미터: `scope` (global / friends / group), `period` (daily / weekly), `metric` (focus_score / study_time)
     - ranking_participation=false 사용자 제외
@@ -197,9 +197,9 @@
 
 ### 3-4. 공통
 
-- [ ]  **전역 예외 처리 미들웨어** — 400 / 403 / 404 / 500 응답 표준화
+- [✅]  **전역 예외 처리 미들웨어** — 400 / 403 / 404 / 500 응답 표준화
 - [ ]  **Swagger 문서 정리** — 전체 API 엔드포인트 명세 완성
-- [ ]  **프론트엔드 팀 API 연동 지원** — CORS 설정, 응답 포맷 통일
+- [✅]  **프론트엔드 팀 API 연동 지원** — CORS 설정, 응답 포맷 통일
 
 ---
 
