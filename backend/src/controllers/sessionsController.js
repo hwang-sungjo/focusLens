@@ -49,14 +49,23 @@ const startSession = async (req, res, next) => {
     });
     if (activeSession) return next(createError('이미 진행 중인 세션이 있습니다.', 409));
 
-    const session = await prisma.sessions.create({
-      data: {
-        user_id: userId,
-        started_at: new Date(),
-        status: 'IN_PROGRESS',
-      },
-      select: { id: true, started_at: true, status: true },
-    });
+    let session;
+    try {
+      session = await prisma.sessions.create({
+        data: {
+          user_id: userId,
+          started_at: new Date(),
+          status: 'IN_PROGRESS',
+        },
+        select: { id: true, started_at: true, status: true },
+      });
+    } catch (err) {
+      // 사전 조회 이후 동시에 시작된 요청은 DB 부분 유니크 인덱스가 차단한다.
+      if (err.code === 'P2002') {
+        return next(createError('이미 진행 중인 세션이 있습니다.', 409));
+      }
+      throw err;
+    }
     return res.status(201).json({
       success: true,
       data: { session_id: session.id, started_at: session.started_at, status: session.status },

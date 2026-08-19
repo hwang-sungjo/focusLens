@@ -83,6 +83,15 @@ const respondRequest = async (req, res, next) => {
     if (!canProcess) return next(createError('해당 요청을 처리할 권한이 없습니다.', 403));
 
     const result = await prisma.$transaction(async (tx) => {
+      // PENDING인 행을 먼저 원자적으로 선점해 동시 응답 중 하나만 성공시킨다.
+      const transition = await tx.user_connection_requests.updateMany({
+        where: { id, status: 'PENDING' },
+        data: { status },
+      });
+      if (transition.count !== 1) {
+        throw createError('이미 처리된 요청입니다.', 409);
+      }
+
       let connection = null;
 
       if (status === 'ACCEPTED') {
@@ -98,13 +107,7 @@ const respondRequest = async (req, res, next) => {
         });
       }
 
-      const updated = await tx.user_connection_requests.update({
-        where: { id },
-        data: { status },
-        select: { id: true, status: true },
-      });
-
-      return { updated, connection };
+      return { updated: { id, status }, connection };
     });
 
     return res.status(200).json({

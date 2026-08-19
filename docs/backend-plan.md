@@ -86,7 +86,7 @@
 
 ### 3-1. 인증 및 코어 기능
 
-> ✅ 완료 재검증 (2026-08-17): Prisma schema/migration 검증, Jest 11/11, PostgreSQL·Redis 연동 E2E 27/27 통과
+> ✅ 완료 재검증 (2026-08-19): Prisma schema/migration 검증, Jest 19/19, PostgreSQL·Redis 연동 E2E 통과, 동시 세션 시작 20건 중 1건만 생성 확인
 
 - [✅]  **JWT 인증 미들웨어 구현**
     - 모든 보호된 라우트에 적용
@@ -104,6 +104,7 @@
 - [✅]  **세션 시작 API** — `POST /api/sessions/start`
     - Request: `{}` (`user_id`는 JWT `sub`에서 추출)
     - Response: `201 + session_id`
+    - DB 부분 유니크 인덱스로 사용자별 IN_PROGRESS 세션 1개 보장
 - [✅]  **세션 종료 API** — `POST /api/sessions/:id/end`
     - avg_score는 sessions에 저장하지 않고 리포트/조회 API에서 concentration_logs로 산출
     - report 자동 생성 트리거 (summary_json에 gaze/blink/head 분리 통계 포함)
@@ -130,7 +131,7 @@
 
 ### 3-2. 소셜 네트워킹 기능
 
-> ✅ 완료 검증 (2026-08-17): Prisma schema/migration 검증, Jest 11/11, PostgreSQL·Redis 연동 E2E 81/81 통과
+> ✅ 완료 재검증 (2026-08-19): Prisma schema/migration 검증, Jest 19/19, PostgreSQL·Redis 연동 E2E 통과, 친구 요청 수락·거절 동시 경쟁 25회 데이터 일관성 확인
 
 - [✅]  **프로필 조회/수정 API**
     - `GET /api/users/:id/profile` — 공개 프로필 (nickname, bio, profile_image_url)
@@ -144,6 +145,7 @@
 - [✅]  **친구 요청 수락/거절 API** — `PATCH /api/connections/:id`
     - status: ACCEPTED → user_connections에 양방향 레코드 자동 생성
     - status: REJECTED → user_connection_requests 상태 업데이트만
+    - PENDING 상태를 원자적으로 선점해 동시 응답 중 하나만 처리
 - [✅]  **친구 목록 조회 API** — `GET /api/connections`
 - [✅]  **세션 공유 API** — `POST /api/session-shares`
     - share_scope: PUBLIC / FRIENDS / GROUP 선택
