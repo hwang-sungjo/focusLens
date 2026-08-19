@@ -2,6 +2,20 @@
 
 ## Backend
 
+### 실행 및 API 문서
+
+로컬 실행 시 Node.js 20 이상이 필요하며, Docker 실행은 프로젝트의 Node.js 20 이미지를 사용한다.
+
+```bash
+docker compose up -d --build
+```
+
+- Swagger UI: `http://localhost:3000/api-docs/`
+- OpenAPI JSON: `http://localhost:3000/api-docs/openapi.json`
+- Health check: `http://localhost:3000/health`
+
+Swagger UI의 `Authorize` 버튼에 로그인 응답의 `access_token`을 입력하면 보호된 API를 브라우저에서 직접 호출할 수 있다.
+
 ### architecture
 ```
 src/

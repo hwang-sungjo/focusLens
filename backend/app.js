@@ -1,9 +1,13 @@
 // app.js — Express 앱 설정 (라우터 마운트, 미들웨어 등록)
 require('dotenv').config();
 
+const fs = require('fs');
+const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
+const swaggerUi = require('swagger-ui-express');
+const YAML = require('yaml');
 
 const authRouter = require('./src/routes/auth');
 const sessionsRouter = require('./src/routes/sessions');
@@ -19,6 +23,8 @@ const prisma = require('./src/models/prismaClient');
 const { redis } = require('./src/services/redis');
 
 const app = express();
+const openApiPath = path.resolve(__dirname, '../docs/swagger.yaml');
+const openApiDocument = YAML.parse(fs.readFileSync(openApiPath, 'utf8'));
 
 // ── 기본 미들웨어 ──────────────────────────────────────────────────
 app.use(cors({ origin: process.env.CORS_ORIGIN || '*', credentials: true }));
@@ -56,6 +62,21 @@ app.get('/health', async (_req, res) => {
     error: allHealthy ? '' : '일부 서비스에 연결할 수 없습니다.',
   });
 });
+
+// ── API Documentation ─────────────────────────────────────────────
+// docs/swagger.yaml을 단일 원본으로 사용해 명세와 브라우저 테스트 화면의 불일치를 방지한다.
+app.get('/api-docs/openapi.json', (_req, res) => res.status(200).json(openApiDocument));
+app.use(
+  '/api-docs',
+  swaggerUi.serve,
+  swaggerUi.setup(openApiDocument, {
+    customSiteTitle: 'FocusLens API Docs',
+    swaggerOptions: {
+      displayRequestDuration: true,
+      persistAuthorization: true,
+    },
+  }),
+);
 
 // ── API 라우터 마운트 ──────────────────────────────────────────────
 app.use('/api/auth', authRouter);
