@@ -1,6 +1,6 @@
-# FocusLens API 명세서 (초안)
+# FocusLens API 명세서
 
-> **기준 문서**: `docs/backend_plan.md` Phase 1 API 명세서 초안  
+> **기준 문서**: `docs/backend-plan.md` Phase 3 MVP 구현
 > **Base URL**: `/api`  
 > **인증 방식**: JWT Bearer Token (`Authorization: Bearer <access_token>`)  
 > **토큰 만료**: Access Token 1시간
@@ -19,7 +19,7 @@
 {
   "success": true,
   "data": {},
-  "error": null
+  "error": ""
 }
 ```
 
@@ -28,7 +28,7 @@
 ```json
 {
   "success": false,
-  "data": null,
+  "data": {},
   "error": "에러 메시지"
 }
 ```
@@ -108,7 +108,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
     "access_token": "jwt",
     "expires_in": 3600
   },
-  "error": null
+  "error": ""
 }
 ```
 
@@ -150,7 +150,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
     "access_token": "jwt",
     "expires_in": 3600
   },
-  "error": null
+  "error": ""
 }
 ```
 
@@ -186,7 +186,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
   "data": {
     "message": "로그아웃되었습니다"
   },
-  "error": null
+  "error": ""
 }
 ```
 
@@ -230,7 +230,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
     "started_at": "2026-06-27T09:00:00.000Z",
     "status": "IN_PROGRESS"
   },
-  "error": null
+  "error": ""
 }
 ```
 
@@ -289,7 +289,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
     "attention_state": "FOCUSED",
     "face_detected": true
   },
-  "error": null
+  "error": ""
 }
 ```
 
@@ -346,7 +346,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
       "distracted_minutes": 5
     }
   },
-  "error": null
+  "error": ""
 }
 ```
 
@@ -405,7 +405,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
       "total": 42
     }
   },
-  "error": null
+  "error": ""
 }
 ```
 
@@ -462,7 +462,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
       }
     ]
   },
-  "error": null
+  "error": ""
 }
 ```
 
@@ -528,7 +528,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
     ],
     "created_at": "2026-06-27T10:00:05.000Z"
   },
-  "error": null
+  "error": ""
 }
 ```
 
@@ -584,7 +584,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
     "weekly_avg_focus_score": 74.8,
     "weekly_total_study_seconds": 28800
   },
-  "error": null
+  "error": ""
 }
 ```
 
@@ -597,7 +597,224 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 
 ---
 
-## 5. 소셜 — 친구 연결 (Connections)
+### GET /api/reports/monthly
+
+기준일을 포함한 최근 30일의 일별 집중도 요약. `COMPLETED` 세션만 집계한다.
+
+| 항목 | 내용 |
+| --- | --- |
+| **Method** | `GET` |
+| **Path** | `/api/reports/monthly` |
+| **인증** | **필요** |
+
+**Query Parameters**
+
+| 이름 | 필수 | 설명 |
+| --- | --- | --- |
+| `end_date` | N | 기준 종료일 (`YYYY-MM-DD`, 기본 오늘) |
+
+**Response `200`**
+
+```json
+{
+  "success": true,
+  "data": {
+    "period": {
+      "start_date": "2026-05-29",
+      "end_date": "2026-06-27"
+    },
+    "daily_summaries": [
+      {
+        "date": "2026-06-27",
+        "session_count": 2,
+        "total_study_seconds": 7200,
+        "avg_focus_score": 76.3
+      }
+    ],
+    "monthly_avg_focus_score": 74.8,
+    "monthly_total_study_seconds": 86400
+  },
+  "error": ""
+}
+```
+
+**에러 케이스**
+
+| 상태 | error 예시 |
+| --- | --- |
+| 400 | `"end_date 형식이 올바르지 않습니다"` |
+| 401 | `"인증 토큰이 필요합니다"` |
+
+---
+
+## 5. 사용자 프로필 및 프라이버시 (Users)
+
+### GET /api/users/:id/profile
+
+활성 사용자의 공개 프로필을 조회한다.
+
+| 항목 | 내용 |
+| --- | --- |
+| **Method** | `GET` |
+| **Path** | `/api/users/:id/profile` |
+| **인증** | **필요** |
+
+**Response `200`**
+
+```json
+{
+  "success": true,
+  "data": {
+    "user_id": "uuid",
+    "nickname": "focus_master",
+    "profile_image_url": "https://example.com/profile.png",
+    "bio": "매일 집중하는 개발자"
+  },
+  "error": ""
+}
+```
+
+**에러 케이스**
+
+| 상태 | error 예시 |
+| --- | --- |
+| 400 | `"유효한 사용자 ID가 아닙니다"` |
+| 401 | `"인증 토큰이 필요합니다"` |
+| 404 | `"프로필을 찾을 수 없습니다"` |
+
+---
+
+### PATCH /api/users/me/profile
+
+내 닉네임, 소개, 프로필 이미지 URL을 수정한다. 전달한 필드만 변경한다.
+
+| 항목 | 내용 |
+| --- | --- |
+| **Method** | `PATCH` |
+| **Path** | `/api/users/me/profile` |
+| **인증** | **필요** |
+
+**Request Body**
+
+```json
+{
+  "nickname": "focus_master",
+  "bio": "매일 집중하는 개발자",
+  "profile_image_url": "https://example.com/profile.png"
+}
+```
+
+**Response `200`**
+
+```json
+{
+  "success": true,
+  "data": {
+    "user_id": "uuid",
+    "nickname": "focus_master",
+    "bio": "매일 집중하는 개발자",
+    "profile_image_url": "https://example.com/profile.png",
+    "updated_at": "2026-06-27T09:00:00.000Z"
+  },
+  "error": ""
+}
+```
+
+**에러 케이스**
+
+| 상태 | error 예시 |
+| --- | --- |
+| 400 | `"nickname은 2~30자여야 합니다"` |
+| 401 | `"인증 토큰이 필요합니다"` |
+| 409 | `"이미 존재하는 데이터입니다"` |
+
+---
+
+### GET /api/users/me/privacy
+
+내 세션 공개 범위와 랭킹 참여 설정을 조회한다.
+
+| 항목 | 내용 |
+| --- | --- |
+| **Method** | `GET` |
+| **Path** | `/api/users/me/privacy` |
+| **인증** | **필요** |
+
+**Response `200`**
+
+```json
+{
+  "success": true,
+  "data": {
+    "default_session_scope": "PRIVATE",
+    "score_visibility": "PRIVATE",
+    "study_time_visibility": "PRIVATE",
+    "group_data_sharing": true,
+    "ranking_participation": false
+  },
+  "error": ""
+}
+```
+
+**에러 케이스**
+
+| 상태 | error 예시 |
+| --- | --- |
+| 401 | `"인증 토큰이 필요합니다"` |
+| 404 | `"프라이버시 설정을 찾을 수 없습니다"` |
+
+---
+
+### PATCH /api/users/me/privacy
+
+내 프라이버시 설정을 수정한다. 전달한 필드만 변경한다.
+
+| 항목 | 내용 |
+| --- | --- |
+| **Method** | `PATCH` |
+| **Path** | `/api/users/me/privacy` |
+| **인증** | **필요** |
+
+**Request Body**
+
+```json
+{
+  "default_session_scope": "FRIENDS",
+  "score_visibility": "FRIENDS",
+  "study_time_visibility": "PRIVATE",
+  "group_data_sharing": true,
+  "ranking_participation": true
+}
+```
+
+> 공개 범위 값은 `PUBLIC`, `FRIENDS`, `GROUP`, `PRIVATE` 중 하나다.
+
+**Response `200`**
+
+```json
+{
+  "success": true,
+  "data": {
+    "default_session_scope": "FRIENDS",
+    "score_visibility": "FRIENDS",
+    "study_time_visibility": "PRIVATE",
+    "group_data_sharing": true,
+    "ranking_participation": true
+  },
+  "error": ""
+}
+```
+
+**에러 케이스**
+
+| 상태 | error 예시 |
+| --- | --- |
+| 400 | `"유효한 공개 범위가 아닙니다"` |
+| 401 | `"인증 토큰이 필요합니다"` |
+
+---
+
+## 6. 소셜 — 친구 연결 (Connections)
 
 ### POST /api/connections/request
 
@@ -631,7 +848,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
     "status": "PENDING",
     "created_at": "2026-06-27T09:00:00.000Z"
   },
-  "error": null
+  "error": ""
 }
 ```
 
@@ -688,7 +905,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
     "status": "ACCEPTED",
     "connection_id": "uuid"
   },
-  "error": null
+  "error": ""
 }
 ```
 
@@ -742,7 +959,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
     "pending_received": [],
     "pending_sent": []
   },
-  "error": null
+  "error": ""
 }
 ```
 
@@ -754,7 +971,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 
 ---
 
-## 6. 소셜 — 세션 공유 (Session Shares)
+## 7. 소셜 — 세션 공유 (Session Shares)
 
 > 세션 소유자: `session_id` → `sessions.user_id` ( `session_shares.user_id` 컬럼 없음 )  
 > 공유 시 `user_privacy_settings.default_session_scope`를 초과하는 공개는 차단한다.
@@ -801,7 +1018,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
     "status": "ACTIVE",
     "created_at": "2026-06-27T10:05:00.000Z"
   },
-  "error": null
+  "error": ""
 }
 ```
 
@@ -881,7 +1098,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
       "total": 100
     }
   },
-  "error": null
+  "error": ""
 }
 ```
 
@@ -938,7 +1155,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
     "reaction_type": "LIKE",
     "created_at": "2026-06-27T10:10:00.000Z"
   },
-  "error": null
+  "error": ""
 }
 ```
 
@@ -954,7 +1171,47 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 
 ---
 
-## 7. 랭킹 (Rankings)
+### DELETE /api/session-shares/:id/reactions/:reactionType
+
+내가 남긴 특정 유형의 공감 반응을 취소한다. 반응이 이미 없어도 성공으로 처리한다.
+
+| 항목 | 내용 |
+| --- | --- |
+| **Method** | `DELETE` |
+| **Path** | `/api/session-shares/:id/reactions/:reactionType` |
+| **인증** | **필요** |
+
+**Path Parameters**
+
+| 이름 | 설명 |
+| --- | --- |
+| `id` | session_share UUID |
+| `reactionType` | `LIKE` \| `CHEER` \| `EMPATHY` |
+
+**Response `200`**
+
+```json
+{
+  "success": true,
+  "data": {
+    "message": "공감 반응이 취소되었습니다."
+  },
+  "error": ""
+}
+```
+
+**에러 케이스**
+
+| 상태 | error 예시 |
+| --- | --- |
+| 400 | `"reactionType 값이 올바르지 않습니다"` |
+| 401 | `"인증 토큰이 필요합니다"` |
+| 403 | `"해당 공유 게시물에 접근할 수 없습니다"` |
+| 404 | `"공유 게시물을 찾을 수 없습니다"` |
+
+---
+
+## 8. 랭킹 (Rankings)
 
 ### GET /api/rankings
 
@@ -1003,7 +1260,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
       "value": 72.1
     }
   },
-  "error": null
+  "error": ""
 }
 ```
 
@@ -1022,7 +1279,50 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 
 ---
 
-## 8. 그룹 (Groups)
+## 9. 그룹 (Groups)
+
+### GET /api/groups
+
+JWT 사용자가 `ACTIVE` 구성원으로 속한 그룹 목록을 최근 참여순으로 조회한다.
+
+| 항목 | 내용 |
+| --- | --- |
+| **Method** | `GET` |
+| **Path** | `/api/groups` |
+| **인증** | **필요** |
+
+**Response `200`**
+
+```json
+{
+  "success": true,
+  "data": {
+    "groups": [
+      {
+        "group_id": "uuid",
+        "name": "CS 스터디",
+        "description": "알고리즘 집중 스터디",
+        "group_type": "STUDY",
+        "visibility": "PRIVATE",
+        "status": "ACTIVE",
+        "member_count": 8,
+        "my_role": "MEMBER",
+        "joined_at": "2026-06-27T09:00:00.000Z",
+        "created_at": "2026-06-20T09:00:00.000Z"
+      }
+    ]
+  },
+  "error": ""
+}
+```
+
+**에러 케이스**
+
+| 상태 | error 예시 |
+| --- | --- |
+| 401 | `"인증 토큰이 필요합니다"` |
+
+---
 
 ### POST /api/groups
 
@@ -1049,7 +1349,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 | --- | --- | --- |
 | `name` | string | 그룹명 |
 | `description` | string | 선택 |
-| `group_type` | enum | `STUDY` \| `TEAM` \| `OPEN` |
+| `group_type` | enum | `STUDY` \| `PROJECT` \| `CHALLENGE` |
 | `visibility` | enum | `PUBLIC` \| `PRIVATE` |
 
 **Response `201`**
@@ -1067,7 +1367,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
     "my_role": "OWNER",
     "created_at": "2026-06-27T09:00:00.000Z"
   },
-  "error": null
+  "error": ""
 }
 ```
 
@@ -1123,7 +1423,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
     "my_role": "MEMBER",
     "created_at": "2026-06-27T09:00:00.000Z"
   },
-  "error": null
+  "error": ""
 }
 ```
 
@@ -1143,6 +1443,51 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 | 401 | `"인증 토큰이 필요합니다"` |
 | 403 | `"비공개 그룹은 구성원만 조회할 수 있습니다"` |
 | 404 | `"그룹을 찾을 수 없습니다"` |
+
+---
+
+### POST /api/groups/join
+
+초대 코드로 그룹에 참여한다. 초대 대상 사용자 ID 또는 이메일이 JWT 사용자와 일치해야 한다.
+
+| 항목 | 내용 |
+| --- | --- |
+| **Method** | `POST` |
+| **Path** | `/api/groups/join` |
+| **인증** | **필요** |
+
+**Request Body**
+
+```json
+{
+  "invite_code": "ABC123XYZ"
+}
+```
+
+**Response `200`**
+
+```json
+{
+  "success": true,
+  "data": {
+    "group_id": "uuid",
+    "member_id": "uuid",
+    "group_role": "MEMBER",
+    "joined_at": "2026-06-27T09:00:00.000Z"
+  },
+  "error": ""
+}
+```
+
+**에러 케이스**
+
+| 상태 | error 예시 |
+| --- | --- |
+| 400 | `"만료되었거나 이미 사용된 초대 코드입니다"` |
+| 401 | `"인증 토큰이 필요합니다"` |
+| 403 | `"초대 대상 사용자와 일치하지 않습니다"` |
+| 404 | `"유효하지 않은 초대 코드입니다"` |
+| 409 | `"이미 그룹 구성원입니다"` |
 
 ---
 
@@ -1191,7 +1536,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
     "expires_at": "2026-07-04T09:00:00.000Z",
     "created_at": "2026-06-27T09:00:00.000Z"
   },
-  "error": null
+  "error": ""
 }
 ```
 
@@ -1256,7 +1601,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
     "group_role": "MANAGER",
     "updated_at": "2026-06-27T10:00:00.000Z"
   },
-  "error": null
+  "error": ""
 }
 ```
 
@@ -1282,7 +1627,110 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 
 ---
 
-## 9. 그룹 목표 (Group Goals)
+### DELETE /api/groups/:id/members/:memberId
+
+그룹 구성원을 내보내고 `group_members.status`를 `REMOVED`로 변경한다.
+
+| 항목 | 내용 |
+| --- | --- |
+| **Method** | `DELETE` |
+| **Path** | `/api/groups/:id/members/:memberId` |
+| **인증** | **필요** |
+
+**Path Parameters**
+
+| 이름 | 설명 |
+| --- | --- |
+| `id` | 그룹 UUID |
+| `memberId` | `group_members.id` UUID |
+
+**Response `200`**
+
+```json
+{
+  "success": true,
+  "data": {
+    "member_id": "uuid",
+    "status": "REMOVED"
+  },
+  "error": ""
+}
+```
+
+**접근 제어**
+
+| 요청자 | 허용 범위 |
+| --- | --- |
+| `OWNER` | OWNER가 아닌 활성 구성원 내보내기 가능 |
+| `MANAGER` | MEMBER 또는 본인 내보내기 가능, 다른 MANAGER와 OWNER는 불가 |
+| `MEMBER` / 비구성원 | 실행 불가 |
+
+**에러 케이스**
+
+| 상태 | error 예시 |
+| --- | --- |
+| 400 | `"OWNER는 그룹에서 내보낼 수 없습니다"` |
+| 401 | `"인증 토큰이 필요합니다"` |
+| 403 | `"멤버 내보내기 권한이 없습니다"` |
+| 404 | `"멤버를 찾을 수 없습니다"` |
+
+---
+
+### GET /api/groups/:id/dashboard
+
+`v_group_member_stats` 기반 그룹 학습 통계를 조회한다.
+
+| 항목 | 내용 |
+| --- | --- |
+| **Method** | `GET` |
+| **Path** | `/api/groups/:id/dashboard` |
+| **인증** | **필요** |
+
+**Response `200`**
+
+```json
+{
+  "success": true,
+  "data": {
+    "group_id": "uuid",
+    "scope": "all_members",
+    "members": [
+      {
+        "group_member_id": "uuid",
+        "user_id": "uuid",
+        "group_role": "MEMBER",
+        "nickname": "focus_master",
+        "profile_image_url": "https://example.com/profile.png",
+        "total_sessions": 12,
+        "total_study_seconds": 28800,
+        "avg_focus_score": 78.5,
+        "last_session_at": "2026-06-27T09:00:00.000Z"
+      }
+    ]
+  },
+  "error": ""
+}
+```
+
+**접근 제어**
+
+| 역할 | `scope` | 조회 범위 |
+| --- | --- | --- |
+| `OWNER`, `MANAGER` | `all_members` | 전체 활성 구성원 |
+| `MEMBER` | `self` | 본인 통계만 |
+| 비구성원 | — | **403** |
+
+**에러 케이스**
+
+| 상태 | error 예시 |
+| --- | --- |
+| 401 | `"인증 토큰이 필요합니다"` |
+| 403 | `"그룹 구성원만 대시보드를 조회할 수 있습니다"` |
+| 404 | `"그룹을 찾을 수 없습니다"` |
+
+---
+
+## 10. 그룹 목표 (Group Goals)
 
 ### POST /api/groups/:id/goals
 
@@ -1330,7 +1778,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
     "status": "ACTIVE",
     "created_at": "2026-06-27T09:00:00.000Z"
   },
-  "error": null
+  "error": ""
 }
 ```
 
@@ -1402,7 +1850,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
       }
     ]
   },
-  "error": null
+  "error": ""
 }
 ```
 
@@ -1466,7 +1914,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
     ],
     "is_group_wide": false
   },
-  "error": null
+  "error": ""
 }
 ```
 
@@ -1489,7 +1937,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 
 ---
 
-## 10. 관리자 피드백 (Manager Feedbacks)
+## 11. 관리자 피드백 (Manager Feedbacks)
 
 > 피드백 작성자·대상자 모두 `group_members.id` 기준으로 연결한다.
 
@@ -1539,7 +1987,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
     "content": "오늘 집중도가 좋았습니다. Head 점수를 조금 더 올려보세요.",
     "created_at": "2026-06-27T11:00:00.000Z"
   },
-  "error": null
+  "error": ""
 }
 ```
 
@@ -1622,7 +2070,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
       "total": 5
     }
   },
-  "error": null
+  "error": ""
 }
 ```
 
@@ -1645,9 +2093,9 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 
 ---
 
-## 11. 부록
+## 12. 부록
 
-### 11.1 Phase 1 엔드포인트 목록
+### 12.1 MVP 엔드포인트 목록
 
 | Method | Path | 인증 |
 | --- | --- | --- |
@@ -1661,32 +2109,46 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 | GET | `/api/sessions/:id` | O |
 | GET | `/api/reports/:session_id` | O |
 | GET | `/api/reports/weekly` | O |
+| GET | `/api/reports/monthly` | O |
+| GET | `/api/users/:id/profile` | O |
+| PATCH | `/api/users/me/profile` | O |
+| GET | `/api/users/me/privacy` | O |
+| PATCH | `/api/users/me/privacy` | O |
 | POST | `/api/connections/request` | O |
 | PATCH | `/api/connections/:id` | O |
 | GET | `/api/connections` | O |
 | POST | `/api/session-shares` | O |
 | GET | `/api/session-shares/feed` | O |
 | POST | `/api/session-shares/:id/reactions` | O |
+| DELETE | `/api/session-shares/:id/reactions/:reactionType` | O |
 | GET | `/api/rankings` | O |
+| GET | `/api/groups` | O |
 | POST | `/api/groups` | O |
+| POST | `/api/groups/join` | O |
 | GET | `/api/groups/:id` | O |
 | POST | `/api/groups/:id/invite` | O |
 | PATCH | `/api/groups/:id/members/:memberId` | O |
+| DELETE | `/api/groups/:id/members/:memberId` | O |
+| GET | `/api/groups/:id/dashboard` | O |
 | POST | `/api/groups/:id/goals` | O |
 | GET | `/api/groups/:id/goals` | O |
 | POST | `/api/groups/:id/goals/:goalId/assignees` | O |
 | POST | `/api/groups/:id/feedbacks` | O |
 | GET | `/api/groups/:id/feedbacks` | O |
 
-### 11.2 그룹 API 권한 매트릭스
+### 12.2 그룹 API 권한 매트릭스
 
 | API | OWNER | MANAGER | MEMBER | 비구성원 |
 | --- | --- | --- | --- | --- |
 | POST `/groups` | — (생성 시 OWNER 부여) | — | — | O (생성 가능) |
+| GET `/groups` | 본인 가입 목록 | 본인 가입 목록 | 본인 가입 목록 | 빈 목록 |
+| POST `/groups/join` | 초대 대상이면 O | 초대 대상이면 O | 초대 대상이면 O | 초대 대상이면 O |
 | GET `/groups/:id` (PRIVATE) | O | O | O | X |
 | GET `/groups/:id` (PUBLIC) | O | O | O | O |
 | POST `/groups/:id/invite` | O | O | X | X |
 | PATCH `/groups/:id/members/:memberId` | O | X | X | X |
+| DELETE `/groups/:id/members/:memberId` | O | 제한적 O | X | X |
+| GET `/groups/:id/dashboard` | 전체 | 전체 | 본인 | X |
 | POST `/groups/:id/goals` | O | O | X | X |
 | GET `/groups/:id/goals` | O | O | O | X |
 | POST `/groups/:id/goals/:goalId/assignees` | O | O | X | X |
@@ -1695,11 +2157,11 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 
 > 모든 권한 판단은 JWT `sub` → `group_members` 조회 → `group_role` + `status=ACTIVE` 기준.
 
-### 11.3 조회용 View 참조
+### 12.3 조회용 View 참조
 
 | View | 사용 API |
 | --- | --- |
 | `v_session_share_reaction_counts` | GET `/api/session-shares/feed` |
 | `v_user_session_summaries` | GET `/api/session-shares/feed`, GET `/api/sessions` |
 | `v_rankings` | GET `/api/rankings` |
-| `v_group_member_stats` | (Phase 3 대시보드 API에서 사용 예정) |
+| `v_group_member_stats` | GET `/api/groups/:id/dashboard` |

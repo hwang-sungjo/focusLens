@@ -6,12 +6,22 @@ const { createError } = require('../middleware/errorHandler');
 const getPublicProfile = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const profile = await prisma.user_profiles.findUnique({
-      where: { user_id: id },
-      select: { nickname: true, profile_image_url: true, bio: true },
+    const user = await prisma.users.findFirst({
+      where: { id, status: 'ACTIVE', deleted_at: null },
+      select: {
+        id: true,
+        user_profile: {
+          select: { nickname: true, profile_image_url: true, bio: true },
+        },
+      },
     });
-    if (!profile) return next(createError('프로필을 찾을 수 없습니다.', 404));
-    return res.status(200).json({ success: true, data: { profile }, error: '' });
+    if (!user?.user_profile) return next(createError('프로필을 찾을 수 없습니다.', 404));
+
+    return res.status(200).json({
+      success: true,
+      data: { user_id: user.id, ...user.user_profile },
+      error: '',
+    });
   } catch (err) {
     next(err);
   }
@@ -33,7 +43,7 @@ const updateMyProfile = async (req, res, next) => {
       select: { nickname: true, bio: true, profile_image_url: true, updated_at: true },
     });
 
-    return res.status(200).json({ success: true, data: { profile }, error: '' });
+    return res.status(200).json({ success: true, data: { user_id: userId, ...profile }, error: '' });
   } catch (err) {
     next(err);
   }
@@ -54,7 +64,7 @@ const getPrivacySettings = async (req, res, next) => {
       },
     });
     if (!settings) return next(createError('프라이버시 설정을 찾을 수 없습니다.', 404));
-    return res.status(200).json({ success: true, data: { settings }, error: '' });
+    return res.status(200).json({ success: true, data: settings, error: '' });
   } catch (err) {
     next(err);
   }
@@ -75,9 +85,16 @@ const updatePrivacySettings = async (req, res, next) => {
         ...(group_data_sharing !== undefined && { group_data_sharing }),
         ...(ranking_participation !== undefined && { ranking_participation }),
       },
+      select: {
+        default_session_scope: true,
+        score_visibility: true,
+        study_time_visibility: true,
+        group_data_sharing: true,
+        ranking_participation: true,
+      },
     });
 
-    return res.status(200).json({ success: true, data: { settings }, error: '' });
+    return res.status(200).json({ success: true, data: settings, error: '' });
   } catch (err) {
     next(err);
   }

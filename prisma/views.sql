@@ -105,47 +105,46 @@ COMMENT ON VIEW v_user_session_summaries IS
 --    관리자 그룹 대시보드에서 구성원별 기간별 학습 통계 조회에 사용
 --    (기간 필터는 이 View를 WHERE 절로 감싸서 적용)
 -- =============================================================================
-CREATE OR REPLACE VIEW v_group_member_stats AS
+DROP VIEW IF EXISTS v_group_member_stats;
+
+CREATE VIEW v_group_member_stats AS
+WITH session_stats AS (
+    SELECT
+        s.id AS session_id,
+        s.user_id,
+        s.started_at,
+        GREATEST(EXTRACT(EPOCH FROM (s.ended_at - s.started_at))::INT, 0)
+            AS study_seconds,
+        COALESCE(SUM(cl.focus_score), 0)::NUMERIC AS focus_score_sum,
+        COUNT(cl.id)::INT AS focus_log_count
+    FROM sessions s
+    LEFT JOIN concentration_logs cl ON cl.session_id = s.id
+    WHERE s.status = 'COMPLETED'
+      AND s.ended_at IS NOT NULL
+    GROUP BY s.id, s.user_id, s.started_at, s.ended_at
+)
 SELECT
     gm.group_id,
-    gm.id                                                           AS group_member_id,
+    gm.id AS group_member_id,
     gm.user_id,
     gm.group_role,
-    gm.status                                                       AS member_status,
+    gm.status AS member_status,
     gm.joined_at,
-
-    -- 유저 기본 정보
-    u.name                                                          AS user_name,
+    u.name AS user_name,
     up.nickname,
     up.profile_image_url,
-
-    -- 세션 통계 (해당 유저의 전체 세션 기준)
-    COUNT(DISTINCT s.id)::INT                                       AS total_sessions,
-
-    -- 총 학습시간 (완료된 세션만, 초 단위)
-    COALESCE(
-        SUM(
-            CASE
-                WHEN s.status = 'COMPLETED' AND s.ended_at IS NOT NULL
-                THEN EXTRACT(EPOCH FROM (s.ended_at - s.started_at))::INT
-                ELSE 0
-            END
-        )::INT,
-        0
-    )                                                               AS total_study_seconds,
-
-    -- 평균 집중도 (concentration_logs 전체 기준)
-    ROUND(AVG(cl.focus_score)::NUMERIC, 2)                         AS avg_focus_score,
-
-    -- 최근 세션 시작 시각
-    MAX(s.started_at)                                               AS last_session_at
-
+    COUNT(ss.session_id)::INT AS total_sessions,
+    COALESCE(SUM(ss.study_seconds), 0)::INT AS total_study_seconds,
+    CASE
+        WHEN SUM(ss.focus_log_count) > 0
+        THEN ROUND(SUM(ss.focus_score_sum) / SUM(ss.focus_log_count), 2)
+        ELSE NULL
+    END AS avg_focus_score,
+    MAX(ss.started_at) AS last_session_at
 FROM group_members gm
-JOIN users            u  ON u.id  = gm.user_id
+JOIN users u ON u.id = gm.user_id
 LEFT JOIN user_profiles up ON up.user_id = gm.user_id
-LEFT JOIN sessions    s  ON s.user_id = gm.user_id
-                        AND s.status = 'COMPLETED'
-LEFT JOIN concentration_logs cl ON cl.session_id = s.id
+LEFT JOIN session_stats ss ON ss.user_id = gm.user_id
 WHERE gm.status = 'ACTIVE'
 GROUP BY
     gm.group_id,
@@ -159,75 +158,51 @@ GROUP BY
     up.profile_image_url;
 
 COMMENT ON VIEW v_group_member_stats IS
-    '그룹 구성원별 학습 통계. OWNER/MANAGER 전용 대시보드에서 사용. '
-    '기간 필터가 필요한 경우 이 View에 WHERE s.started_at BETWEEN ... 조건을 추가해 조회.';
+    '그룹 구성원별 완료 세션 수·학습시간·가중 평균 집중도 통계. OWNER/MANAGER 대시보드에서 사용.';
 
 
 -- =============================================================================
 -- 4. v_rankings
---    ranking_participation = true인 사용자만 집계
---    focus_score 기준 내림차순 정렬
+--    ranking_participation = true 사용자의 일별 집계 원천
+--    API에서 daily/weekly 기간과 global/friends/group 범위를 적용한 뒤 순위를 산출
 --    설계 원칙: 랭킹 파생값은 기본 테이블에 저장하지 않고 이 View에서 산출
---    조회 빈도가 높아지면 MATERIALIZED VIEW 전환 검토 (docs/erd.md §6 참고)
 -- =============================================================================
-CREATE OR REPLACE VIEW v_rankings AS
-SELECT
-    -- 랭킹 순위 (avg_focus_score 기준 내림차순)
-    ROW_NUMBER() OVER (
-        ORDER BY ROUND(AVG(cl.focus_score)::NUMERIC, 2) DESC
-    )::INT                                                          AS rank,
+DROP VIEW IF EXISTS v_rankings;
 
-    u.id                                                            AS user_id,
-    u.name,
+CREATE VIEW v_rankings AS
+WITH session_stats AS (
+    SELECT
+        s.id AS session_id,
+        s.user_id,
+        s.started_at::DATE AS activity_date,
+        GREATEST(EXTRACT(EPOCH FROM (s.ended_at - s.started_at))::INT, 0)
+            AS study_seconds,
+        COALESCE(SUM(cl.focus_score), 0)::NUMERIC AS focus_score_sum,
+        COUNT(cl.id)::INT AS focus_log_count
+    FROM sessions s
+    LEFT JOIN concentration_logs cl ON cl.session_id = s.id
+    WHERE s.status = 'COMPLETED'
+      AND s.ended_at IS NOT NULL
+    GROUP BY s.id, s.user_id, s.started_at, s.ended_at
+)
+SELECT
+    ss.activity_date,
+    u.id AS user_id,
     up.nickname,
     up.profile_image_url,
-
-    -- 집중도 지표
-    ROUND(AVG(cl.focus_score)::NUMERIC,  2)                        AS avg_focus_score,
-    ROUND(AVG(cl.gaze_score)::NUMERIC,   2)                        AS avg_gaze_score,
-    ROUND(AVG(cl.blink_score)::NUMERIC,  2)                        AS avg_blink_score,
-    ROUND(AVG(cl.head_score)::NUMERIC,   2)                        AS avg_head_score,
-
-    -- 학습시간 지표 (완료된 세션 합산, 초 단위)
-    COALESCE(
-        SUM(
-            CASE
-                WHEN s.status = 'COMPLETED' AND s.ended_at IS NOT NULL
-                THEN EXTRACT(EPOCH FROM (s.ended_at - s.started_at))::INT
-                ELSE 0
-            END
-        )::INT,
-        0
-    )                                                               AS total_study_seconds,
-
-    -- 세션 수
-    COUNT(DISTINCT s.id)::INT                                       AS total_sessions,
-
-    -- 로그 수
-    COUNT(cl.id)::INT                                               AS total_logs
-
+    SUM(ss.focus_score_sum)::NUMERIC AS focus_score_sum,
+    SUM(ss.focus_log_count)::INT AS focus_log_count,
+    SUM(ss.study_seconds)::INT AS total_study_seconds,
+    COUNT(ss.session_id)::INT AS session_count
 FROM users u
--- 반드시 ranking_participation = true 조건 적용 (ERD 보안 원칙)
 JOIN user_privacy_settings ups ON ups.user_id = u.id
                                AND ups.ranking_participation = TRUE
-LEFT JOIN user_profiles    up  ON up.user_id = u.id
-LEFT JOIN sessions         s   ON s.user_id  = u.id
-                               AND s.status = 'COMPLETED'
-LEFT JOIN concentration_logs cl ON cl.session_id = s.id
--- 탈퇴/정지 유저 제외
-WHERE u.status  = 'ACTIVE'
+JOIN session_stats ss ON ss.user_id = u.id
+LEFT JOIN user_profiles up ON up.user_id = u.id
+WHERE u.status = 'ACTIVE'
   AND u.deleted_at IS NULL
-GROUP BY
-    u.id,
-    u.name,
-    up.nickname,
-    up.profile_image_url
--- 로그가 하나도 없는 유저(avg_focus_score=NULL)는 제외
-HAVING AVG(cl.focus_score) IS NOT NULL
-ORDER BY avg_focus_score DESC;
+GROUP BY ss.activity_date, u.id, up.nickname, up.profile_image_url;
 
 COMMENT ON VIEW v_rankings IS
-    '전체 랭킹 View. ranking_participation=TRUE 사용자만 집계. '
-    'focus_score 기준 내림차순. '
-    '친구/그룹 랭킹은 이 View에 user_id IN (...) 필터를 추가해 조회. '
-    '조회 빈도가 높아지면 MATERIALIZED VIEW로 전환 검토 (docs/erd.md §6).';
+    '일별 랭킹 원천 View. ranking_participation=TRUE 사용자의 집중도 합계·로그 수·학습시간·세션 수를 집계. '
+    'API에서 기간과 친구/그룹 범위를 적용한 뒤 최종 순위를 산출한다.';

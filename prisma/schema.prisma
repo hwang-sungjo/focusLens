@@ -193,6 +193,7 @@ model sessions {
   session_shares      session_shares[]
   manager_feedbacks   manager_feedbacks[]
 
+  // 사용자별 IN_PROGRESS 세션 단일성은 raw migration의 부분 유니크 인덱스로 강제한다.
   @@index([user_id, started_at])
   @@map("sessions")
 }

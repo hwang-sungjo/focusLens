@@ -31,7 +31,7 @@
     - 그룹 목표: `POST /groups/:id/goals`, `GET /groups/:id/goals`, `POST /groups/:id/goals/:goalId/assignees`
     - 관리자 피드백: `POST /groups/:id/feedbacks`, `GET /groups/:id/feedbacks`
 - [✅]  **JWT 인증 흐름 설계** — Stateless 토큰 기반, 만료 시간 정의 → `docs/auth-flow.md`
-- [✅]  **집중도 점수 산정 기준 협의** — `S = (Gaze × 0.4) + (Blink × 0.3) + (Head × 0.3)` 가중치 확정 → `docs/api-spec.md`, `src/utils/focusScore.js`
+- [✅]  **집중도 점수 산정 기준 협의** — `S = (Gaze × 0.4) + (Blink × 0.3) + (Head × 0.3)` 가중치 확정 → `docs/api-spec.md`, `backend/src/utils/focusScore.js`
 - [✅]  **프라이버시 설정 정책 설계** — default_session_scope (PUBLIC / FRIENDS / GROUP / PRIVATE), score_visibility, study_time_visibility, ranking_participation 옵션 정의 → `docs/api-spec.md`, `docs/feature-spec.md`, `prisma/schema.prisma`
 - [✅]  **랭킹 집계 기준 협의** — 집계 대상(ranking_participation=true인 사용자), 기간(일간/주간), 지표(평균 집중도 / 총 학습시간) 확정 → `docs/api-spec.md` §7
 - [✅]  **ERD 최종 확정 (팀 리뷰)**
@@ -86,7 +86,7 @@
 
 ### 3-1. 인증 및 코어 기능
 
-> ✅ 완료 재검증 (2026-08-17): Prisma schema/migration 검증, Jest 11/11, PostgreSQL·Redis 연동 E2E 27/27 통과
+> ✅ 완료 재검증 (2026-08-19): Prisma schema/migration 검증, Jest 19/19, PostgreSQL·Redis 연동 E2E 통과, 동시 세션 시작 20건 중 1건만 생성 확인
 
 - [✅]  **JWT 인증 미들웨어 구현**
     - 모든 보호된 라우트에 적용
@@ -104,6 +104,7 @@
 - [✅]  **세션 시작 API** — `POST /api/sessions/start`
     - Request: `{}` (`user_id`는 JWT `sub`에서 추출)
     - Response: `201 + session_id`
+    - DB 부분 유니크 인덱스로 사용자별 IN_PROGRESS 세션 1개 보장
 - [✅]  **세션 종료 API** — `POST /api/sessions/:id/end`
     - avg_score는 sessions에 저장하지 않고 리포트/조회 API에서 concentration_logs로 산출
     - report 자동 생성 트리거 (summary_json에 gaze/blink/head 분리 통계 포함)
@@ -130,77 +131,85 @@
 
 ### 3-2. 소셜 네트워킹 기능
 
+> ✅ 완료 재검증 (2026-08-19): Prisma schema/migration 검증, Jest 19/19, PostgreSQL·Redis 연동 E2E 통과, 친구 요청 수락·거절 동시 경쟁 25회 데이터 일관성 확인
+
 - [✅]  **프로필 조회/수정 API**
     - `GET /api/users/:id/profile` — 공개 프로필 (nickname, bio, profile_image_url)
     - `PATCH /api/users/me/profile` — 내 프로필 수정
-- [ ]  **프라이버시 설정 조회/수정 API**
+- [✅]  **프라이버시 설정 조회/수정 API**
     - `GET /api/users/me/privacy` — 현재 공개 설정 조회
     - `PATCH /api/users/me/privacy` — 공개 범위 수정 (default_session_scope, score_visibility 등)
-- [ ]  **친구 요청 API** — `POST /api/connections/request`
+- [✅]  **친구 요청 API** — `POST /api/connections/request`
     - requester_user_id ≠ receiver_user_id 검증 (자기 자신 요청 차단)
     - 이미 연결된 관계 중복 요청 차단
-- [ ]  **친구 요청 수락/거절 API** — `PATCH /api/connections/:id`
+- [✅]  **친구 요청 수락/거절 API** — `PATCH /api/connections/:id`
     - status: ACCEPTED → user_connections에 양방향 레코드 자동 생성
     - status: REJECTED → user_connection_requests 상태 업데이트만
-- [ ]  **친구 목록 조회 API** — `GET /api/connections`
-- [ ]  **세션 공유 API** — `POST /api/session-shares`
+    - PENDING 상태를 원자적으로 선점해 동시 응답 중 하나만 처리
+- [✅]  **친구 목록 조회 API** — `GET /api/connections`
+- [✅]  **세션 공유 API** — `POST /api/session-shares`
     - share_scope: PUBLIC / FRIENDS / GROUP 선택
     - GROUP 공유 시 group_id 필수
     - user_privacy_settings.default_session_scope 초과 공개 차단
-- [ ]  **소셜 피드 조회 API** — `GET /api/session-shares/feed`
+- [✅]  **소셜 피드 조회 API** — `GET /api/session-shares/feed`
     - 친구 공개 세션 + 전체 공개 세션 통합 조회
     - v_session_share_reaction_counts View를 통해 공감 개수 포함
     - 조회 대상 세션 소유자의 score_visibility / study_time_visibility 준수
-- [ ]  **공감 반응 API** — `POST /api/session-shares/:id/reactions`
+- [✅]  **공감 반응 API** — `POST /api/session-shares/:id/reactions`
     - reaction_type: LIKE / CHEER / EMPATHY
     - UNIQUE(session_share_id, user_id, reaction_type) 중복 반응 차단
 - [✅]  **공감 반응 취소 API** — `DELETE /api/session-shares/:id/reactions/:reactionType`
-- [ ]  **랭킹 조회 API** — `GET /api/rankings`
+- [✅]  **랭킹 조회 API** — `GET /api/rankings`
     - 쿼리 파라미터: `scope` (global / friends / group), `period` (daily / weekly), `metric` (focus_score / study_time)
     - ranking_participation=false 사용자 제외
     - v_rankings View 기반 집계
 
 ### 3-3. 그룹 및 관리자 기능
 
-- [ ]  **그룹 생성 API** — `POST /api/groups`
+> ✅ 완료 검증 (2026-08-17): Prisma schema/migration 검증, Jest 11/11, PostgreSQL·Redis 연동 E2E 72/72 통과
+
+- [✅]  **그룹 생성 API** — `POST /api/groups`
     - 생성자는 group_members에 group_role=OWNER로 자동 등록
     - groups.created_by_user_id 설정 (이력 보존용, 권한은 group_members 기준)
-- [ ]  **그룹 상세 조회 API** — `GET /api/groups/:id`
+- [✅]  **그룹 상세 조회 API** — `GET /api/groups/:id`
     - visibility 기준 접근 제어 (PUBLIC / PRIVATE)
-- [ ]  **그룹 목록 조회 API** — `GET /api/groups`
+- [✅]  **그룹 목록 조회 API** — `GET /api/groups`
     - 내가 속한 그룹 목록
-- [ ]  **그룹 초대 API** — `POST /api/groups/:id/invite`
+- [✅]  **그룹 초대 API** — `POST /api/groups/:id/invite`
     - group_role=OWNER 또는 MANAGER만 초대 가능
     - invite_code 생성, invitee_email 또는 invitee_user_id 지정
     - expires_at 설정 (기본 7일)
-- [ ]  **초대 코드로 그룹 참여 API** — `POST /api/groups/join`
+- [✅]  **초대 코드로 그룹 참여 API** — `POST /api/groups/join`
     - invite_code 유효성 및 만료 검증
     - 참여 시 group_members에 group_role=MEMBER로 등록
-- [ ]  **그룹 멤버 권한 변경 API** — `PATCH /api/groups/:id/members/:memberId`
+- [✅]  **그룹 멤버 권한 변경 API** — `PATCH /api/groups/:id/members/:memberId`
     - OWNER만 group_role 변경 가능
-- [ ]  **그룹 멤버 내보내기 API** — `DELETE /api/groups/:id/members/:memberId`
+- [✅]  **그룹 멤버 내보내기 API** — `DELETE /api/groups/:id/members/:memberId`
     - OWNER / MANAGER만 실행 가능, OWNER 본인 내보내기 불가
-- [ ]  **그룹 대시보드 조회 API** — `GET /api/groups/:id/dashboard`
+- [✅]  **그룹 대시보드 조회 API** — `GET /api/groups/:id/dashboard`
     - v_group_member_stats View 기반 구성원별 학습 통계
     - OWNER / MANAGER만 전체 구성원 데이터 조회, MEMBER는 자신 데이터만 조회
-- [ ]  **그룹 목표 생성 API** — `POST /api/groups/:id/goals`
+- [✅]  **그룹 목표 생성 API** — `POST /api/groups/:id/goals`
     - OWNER / MANAGER만 생성 가능
     - target_study_minutes, target_focus_score, start_date, end_date 설정
-- [ ]  **그룹 목표 목록 조회 API** — `GET /api/groups/:id/goals`
-- [ ]  **그룹 목표 배정 API** — `POST /api/groups/:id/goals/:goalId/assignees`
+- [✅]  **그룹 목표 목록 조회 API** — `GET /api/groups/:id/goals`
+- [✅]  **그룹 목표 배정 API** — `POST /api/groups/:id/goals/:goalId/assignees`
     - group_goal_assignees에 group_member_id 등록
     - 전체 구성원 대상(목표 배정 없음)과 특정 멤버 배정 구분
-- [ ]  **관리자 피드백 작성 API** — `POST /api/groups/:id/feedbacks`
+- [✅]  **관리자 피드백 작성 API** — `POST /api/groups/:id/feedbacks`
     - manager_member_id: JWT sub 기준 group_members 조회 (group_role=OWNER 또는 MANAGER 검증)
     - target_member_id, session_id(선택), content 저장
-- [ ]  **관리자 피드백 조회 API** — `GET /api/groups/:id/feedbacks`
+- [✅]  **관리자 피드백 조회 API** — `GET /api/groups/:id/feedbacks`
     - OWNER / MANAGER: 전체 피드백 조회
     - MEMBER: 자신이 받은 피드백만 조회
 
 ### 3-4. 공통
 
+> ✅ 완료 검증 (2026-08-19): Express 라우트·API 명세·Swagger 36/36 대조, Redocly OpenAPI lint 통과
+
 - [✅]  **전역 예외 처리 미들웨어** — 400 / 403 / 404 / 500 응답 표준화
-- [ ]  **Swagger 문서 정리** — 전체 API 엔드포인트 명세 완성
+- [✅]  **Swagger 문서 정리** — 전체 API 엔드포인트 명세 완성
+    - Express `/api-docs`에서 Swagger UI 제공, `/api-docs/openapi.json`으로 원본 명세 조회
 - [✅]  **프론트엔드 팀 API 연동 지원** — CORS 설정, 응답 포맷 통일
 
 ---

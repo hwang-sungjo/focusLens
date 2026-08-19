@@ -6,6 +6,7 @@ const { authenticate } = require('../middleware/auth');
 const usersController = require('../controllers/usersController');
 
 const router = Router();
+const visibilityLevels = ['PUBLIC', 'FRIENDS', 'GROUP', 'PRIVATE'];
 
 router.use(authenticate);
 
@@ -22,8 +23,8 @@ router.patch(
   '/me/profile',
   [
     body('nickname').optional().isString().isLength({ min: 2, max: 30 }),
-    body('bio').optional().isString().isLength({ max: 200 }),
-    body('profile_image_url').optional().isURL(),
+    body('bio').optional({ values: 'null' }).isString().isLength({ max: 200 }),
+    body('profile_image_url').optional({ values: 'null' }).isURL(),
   ],
   validate,
   usersController.updateMyProfile,
@@ -38,12 +39,18 @@ router.patch(
   [
     body('default_session_scope')
       .optional()
-      .isIn(['PUBLIC', 'FRIENDS', 'GROUP', 'PRIVATE'])
+      .isIn(visibilityLevels)
       .withMessage('유효한 공개 범위가 아닙니다.'),
-    body('score_visibility').optional().isBoolean(),
-    body('study_time_visibility').optional().isBoolean(),
-    body('group_data_sharing').optional().isBoolean(),
-    body('ranking_participation').optional().isBoolean(),
+    body('score_visibility')
+      .optional()
+      .isIn(visibilityLevels)
+      .withMessage('유효한 점수 공개 범위가 아닙니다.'),
+    body('study_time_visibility')
+      .optional()
+      .isIn(visibilityLevels)
+      .withMessage('유효한 학습 시간 공개 범위가 아닙니다.'),
+    body('group_data_sharing').optional().isBoolean({ strict: true }),
+    body('ranking_participation').optional().isBoolean({ strict: true }),
   ],
   validate,
   usersController.updatePrivacySettings,

@@ -26,7 +26,11 @@ const buildPeriodReport = async (userId, endDateValue, days) => {
   start.setUTCHours(0, 0, 0, 0);
 
   const sessions = await prisma.sessions.findMany({
-    where: { user_id: userId, started_at: { gte: start, lte: end } },
+    where: {
+      user_id: userId,
+      status: 'COMPLETED',
+      started_at: { gte: start, lte: end },
+    },
     include: {
       concentration_logs: {
         where: { logged_at: { gte: start, lte: end } },
