@@ -31,7 +31,7 @@
     - 그룹 목표: `POST /groups/:id/goals`, `GET /groups/:id/goals`, `POST /groups/:id/goals/:goalId/assignees`
     - 관리자 피드백: `POST /groups/:id/feedbacks`, `GET /groups/:id/feedbacks`
 - [✅]  **JWT 인증 흐름 설계** — Stateless 토큰 기반, 만료 시간 정의 → `docs/auth-flow.md`
-- [✅]  **집중도 점수 산정 기준 협의** — `S = (Gaze × 0.4) + (Blink × 0.3) + (Head × 0.3)` 가중치 확정 → `docs/api-spec.md`, `src/utils/focusScore.js`
+- [✅]  **집중도 점수 산정 기준 협의** — `S = (Gaze × 0.4) + (Blink × 0.3) + (Head × 0.3)` 가중치 확정 → `docs/api-spec.md`, `backend/src/utils/focusScore.js`
 - [✅]  **프라이버시 설정 정책 설계** — default_session_scope (PUBLIC / FRIENDS / GROUP / PRIVATE), score_visibility, study_time_visibility, ranking_participation 옵션 정의 → `docs/api-spec.md`, `docs/feature-spec.md`, `prisma/schema.prisma`
 - [✅]  **랭킹 집계 기준 협의** — 집계 대상(ranking_participation=true인 사용자), 기간(일간/주간), 지표(평균 집중도 / 총 학습시간) 확정 → `docs/api-spec.md` §7
 - [✅]  **ERD 최종 확정 (팀 리뷰)**
