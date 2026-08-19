@@ -272,41 +272,55 @@ const inviteMember = async (req, res, next) => {
       if (isActiveMember(membership)) return next(createError('이미 그룹 구성원입니다.', 409));
     }
 
-    const pendingInvitation = await prisma.group_invitations.findFirst({
-      where: {
-        group_id: groupId,
-        status: 'PENDING',
-        expires_at: { gt: new Date() },
-        OR: [
-          ...(invitee?.id ? [{ invitee_user_id: invitee.id }] : []),
-          ...(inviteeEmail
-            ? [{ invitee_email: { equals: inviteeEmail, mode: 'insensitive' } }]
-            : []),
-        ],
-      },
-      select: { id: true },
-    });
-    if (pendingInvitation) return next(createError('이미 처리 대기 중인 초대가 있습니다.', 409));
+    const now = new Date();
+    const targetFilters = [
+      ...(invitee?.id ? [{ invitee_user_id: invitee.id }] : []),
+      ...(inviteeEmail
+        ? [{ invitee_email: { equals: inviteeEmail, mode: 'insensitive' } }]
+        : []),
+    ];
+    const invitation = await prisma.$transaction(async (tx) => {
+      await tx.group_invitations.updateMany({
+        where: {
+          group_id: groupId,
+          status: 'PENDING',
+          expires_at: { lte: now },
+          OR: targetFilters,
+        },
+        data: { status: 'EXPIRED' },
+      });
 
-    const invitation = await prisma.group_invitations.create({
-      data: {
-        group_id: groupId,
-        inviter_member_id: myMember.id,
-        invitee_email: inviteeUserId ? null : inviteeEmail.toLowerCase(),
-        invitee_user_id: inviteeUserId || invitee?.id || null,
-        invite_code: randomBytes(12).toString('hex'),
-        status: 'PENDING',
-        expires_at: new Date(Date.now() + days * 24 * 60 * 60 * 1000),
-      },
-      select: {
-        id: true,
-        invite_code: true,
-        invitee_email: true,
-        invitee_user_id: true,
-        status: true,
-        expires_at: true,
-        created_at: true,
-      },
+      const pendingInvitation = await tx.group_invitations.findFirst({
+        where: {
+          group_id: groupId,
+          status: 'PENDING',
+          expires_at: { gt: now },
+          OR: targetFilters,
+        },
+        select: { id: true },
+      });
+      if (pendingInvitation) throw createError('이미 처리 대기 중인 초대가 있습니다.', 409);
+
+      return tx.group_invitations.create({
+        data: {
+          group_id: groupId,
+          inviter_member_id: myMember.id,
+          invitee_email: inviteeUserId ? null : inviteeEmail.toLowerCase(),
+          invitee_user_id: inviteeUserId || invitee?.id || null,
+          invite_code: randomBytes(12).toString('hex'),
+          status: 'PENDING',
+          expires_at: new Date(now.getTime() + days * 24 * 60 * 60 * 1000),
+        },
+        select: {
+          id: true,
+          invite_code: true,
+          invitee_email: true,
+          invitee_user_id: true,
+          status: true,
+          expires_at: true,
+          created_at: true,
+        },
+      });
     });
 
     return res.status(201).json({
@@ -323,6 +337,9 @@ const inviteMember = async (req, res, next) => {
       error: '',
     });
   } catch (err) {
+    if (err.code === 'P2002') {
+      return next(createError('이미 처리 대기 중인 초대가 있습니다.', 409));
+    }
     next(err);
   }
 };
