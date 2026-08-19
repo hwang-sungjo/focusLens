@@ -105,47 +105,46 @@ COMMENT ON VIEW v_user_session_summaries IS
 --    관리자 그룹 대시보드에서 구성원별 기간별 학습 통계 조회에 사용
 --    (기간 필터는 이 View를 WHERE 절로 감싸서 적용)
 -- =============================================================================
-CREATE OR REPLACE VIEW v_group_member_stats AS
+DROP VIEW IF EXISTS v_group_member_stats;
+
+CREATE VIEW v_group_member_stats AS
+WITH session_stats AS (
+    SELECT
+        s.id AS session_id,
+        s.user_id,
+        s.started_at,
+        GREATEST(EXTRACT(EPOCH FROM (s.ended_at - s.started_at))::INT, 0)
+            AS study_seconds,
+        COALESCE(SUM(cl.focus_score), 0)::NUMERIC AS focus_score_sum,
+        COUNT(cl.id)::INT AS focus_log_count
+    FROM sessions s
+    LEFT JOIN concentration_logs cl ON cl.session_id = s.id
+    WHERE s.status = 'COMPLETED'
+      AND s.ended_at IS NOT NULL
+    GROUP BY s.id, s.user_id, s.started_at, s.ended_at
+)
 SELECT
     gm.group_id,
-    gm.id                                                           AS group_member_id,
+    gm.id AS group_member_id,
     gm.user_id,
     gm.group_role,
-    gm.status                                                       AS member_status,
+    gm.status AS member_status,
     gm.joined_at,
-
-    -- 유저 기본 정보
-    u.name                                                          AS user_name,
+    u.name AS user_name,
     up.nickname,
     up.profile_image_url,
-
-    -- 세션 통계 (해당 유저의 전체 세션 기준)
-    COUNT(DISTINCT s.id)::INT                                       AS total_sessions,
-
-    -- 총 학습시간 (완료된 세션만, 초 단위)
-    COALESCE(
-        SUM(
-            CASE
-                WHEN s.status = 'COMPLETED' AND s.ended_at IS NOT NULL
-                THEN EXTRACT(EPOCH FROM (s.ended_at - s.started_at))::INT
-                ELSE 0
-            END
-        )::INT,
-        0
-    )                                                               AS total_study_seconds,
-
-    -- 평균 집중도 (concentration_logs 전체 기준)
-    ROUND(AVG(cl.focus_score)::NUMERIC, 2)                         AS avg_focus_score,
-
-    -- 최근 세션 시작 시각
-    MAX(s.started_at)                                               AS last_session_at
-
+    COUNT(ss.session_id)::INT AS total_sessions,
+    COALESCE(SUM(ss.study_seconds), 0)::INT AS total_study_seconds,
+    CASE
+        WHEN SUM(ss.focus_log_count) > 0
+        THEN ROUND(SUM(ss.focus_score_sum) / SUM(ss.focus_log_count), 2)
+        ELSE NULL
+    END AS avg_focus_score,
+    MAX(ss.started_at) AS last_session_at
 FROM group_members gm
-JOIN users            u  ON u.id  = gm.user_id
+JOIN users u ON u.id = gm.user_id
 LEFT JOIN user_profiles up ON up.user_id = gm.user_id
-LEFT JOIN sessions    s  ON s.user_id = gm.user_id
-                        AND s.status = 'COMPLETED'
-LEFT JOIN concentration_logs cl ON cl.session_id = s.id
+LEFT JOIN session_stats ss ON ss.user_id = gm.user_id
 WHERE gm.status = 'ACTIVE'
 GROUP BY
     gm.group_id,
@@ -159,8 +158,7 @@ GROUP BY
     up.profile_image_url;
 
 COMMENT ON VIEW v_group_member_stats IS
-    '그룹 구성원별 학습 통계. OWNER/MANAGER 전용 대시보드에서 사용. '
-    '기간 필터가 필요한 경우 이 View에 WHERE s.started_at BETWEEN ... 조건을 추가해 조회.';
+    '그룹 구성원별 완료 세션 수·학습시간·가중 평균 집중도 통계. OWNER/MANAGER 대시보드에서 사용.';
 
 
 -- =============================================================================
