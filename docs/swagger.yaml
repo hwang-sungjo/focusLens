@@ -2,14 +2,17 @@ openapi: 3.0.3
 info:
   title: FocusLens API
   description: |
-    FocusLens 백엔드 REST API (Phase 1).
+    FocusLens 백엔드 Phase 3 MVP REST API.
     기준 문서: `docs/api-spec.md`
     공통 응답: `{ success, data, error }`
   version: 1.0.0
+  license:
+    name: Project repository terms
+    url: https://github.com/hwang-sungjo/focusLens
 
 servers:
-  - url: http://localhost:3000
-    description: Local development
+  - url: /
+    description: 현재 호스트
 
 tags:
   - name: auth
@@ -19,7 +22,7 @@ tags:
   - name: reports
     description: 집중도 리포트
   - name: users
-    description: 사용자 프로필 및 프라이버시 (Phase 1 api-spec 부록 외 — ERD 연동)
+    description: 사용자 프로필 및 프라이버시
   - name: connections
     description: 친구 연결
   - name: session-shares
@@ -49,10 +52,8 @@ components:
           type: boolean
         data:
           type: object
-          nullable: true
         error:
           type: string
-          nullable: true
 
     Pagination:
       type: object
@@ -90,7 +91,7 @@ components:
 
     GroupType:
       type: string
-      enum: [STUDY, TEAM, OPEN]
+      enum: [STUDY, PROJECT, CHALLENGE]
 
     GroupVisibility:
       type: string
@@ -113,7 +114,7 @@ components:
             $ref: '#/components/schemas/ApiResponse'
           example:
             success: false
-            data: null
+            data: {}
             error: 요청 형식이 올바르지 않습니다
     Response401:
       description: Unauthorized — 인증 토큰 없음·만료·무효
@@ -123,7 +124,7 @@ components:
             $ref: '#/components/schemas/ApiResponse'
           example:
             success: false
-            data: null
+            data: {}
             error: 인증 토큰이 필요합니다
     Response403:
       description: Forbidden — 권한 없음
@@ -133,7 +134,7 @@ components:
             $ref: '#/components/schemas/ApiResponse'
           example:
             success: false
-            data: null
+            data: {}
             error: 해당 리소스에 대한 권한이 없습니다
     Response404:
       description: Not Found — 리소스 없음
@@ -143,7 +144,7 @@ components:
             $ref: '#/components/schemas/ApiResponse'
           example:
             success: false
-            data: null
+            data: {}
             error: 리소스를 찾을 수 없습니다
 
 paths:
@@ -156,6 +157,7 @@ paths:
       summary: 회원가입
       description: 가입 시 user_profiles, user_privacy_settings 기본값 자동 생성
       operationId: authRegister
+      security: []
       requestBody:
         required: true
         content:
@@ -214,6 +216,7 @@ paths:
       summary: 로그인
       description: JWT access token 발급 (만료 1시간)
       operationId: authLogin
+      security: []
       requestBody:
         required: true
         content:
@@ -691,6 +694,68 @@ paths:
           $ref: '#/components/responses/Response403'
         '404':
           $ref: '#/components/responses/Response404'
+
+  /api/reports/monthly:
+    get:
+      tags: [reports]
+      summary: 월간 집중도 요약
+      description: 완료된 세션만 대상으로 최근 30일 일별 집중도와 학습 시간을 집계
+      operationId: reportsMonthly
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: end_date
+          in: query
+          description: 기준 종료일 (ISO 8601 date)
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          period:
+                            type: object
+                            properties:
+                              start_date:
+                                type: string
+                                format: date
+                              end_date:
+                                type: string
+                                format: date
+                          daily_summaries:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                date:
+                                  type: string
+                                  format: date
+                                session_count:
+                                  type: integer
+                                total_study_seconds:
+                                  type: integer
+                                avg_focus_score:
+                                  type: number
+                                  nullable: true
+                          monthly_avg_focus_score:
+                            type: number
+                            nullable: true
+                          monthly_total_study_seconds:
+                            type: integer
+        '400':
+          $ref: '#/components/responses/Response400'
+        '401':
+          $ref: '#/components/responses/Response401'
 
   /api/reports/{session_id}:
     get:
@@ -1248,6 +1313,50 @@ paths:
         '404':
           $ref: '#/components/responses/Response404'
 
+  /api/session-shares/{id}/reactions/{reactionType}:
+    delete:
+      tags: [session-shares]
+      summary: 공감 반응 취소
+      operationId: sessionSharesRemoveReaction
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: session_share UUID
+          schema:
+            type: string
+            format: uuid
+        - name: reactionType
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ReactionType'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          message:
+                            type: string
+        '400':
+          $ref: '#/components/responses/Response400'
+        '401':
+          $ref: '#/components/responses/Response401'
+        '403':
+          $ref: '#/components/responses/Response403'
+        '404':
+          $ref: '#/components/responses/Response404'
+
   # ---------------------------------------------------------------------------
   # rankings
   # ---------------------------------------------------------------------------
@@ -1341,6 +1450,57 @@ paths:
   # groups
   # ---------------------------------------------------------------------------
   /api/groups:
+    get:
+      tags: [groups]
+      summary: 내가 속한 그룹 목록 조회
+      operationId: groupsGetMine
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          groups:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                group_id:
+                                  type: string
+                                  format: uuid
+                                name:
+                                  type: string
+                                description:
+                                  type: string
+                                  nullable: true
+                                group_type:
+                                  $ref: '#/components/schemas/GroupType'
+                                visibility:
+                                  $ref: '#/components/schemas/GroupVisibility'
+                                status:
+                                  type: string
+                                member_count:
+                                  type: integer
+                                my_role:
+                                  $ref: '#/components/schemas/GroupRole'
+                                joined_at:
+                                  type: string
+                                  format: date-time
+                                created_at:
+                                  type: string
+                                  format: date-time
+        '401':
+          $ref: '#/components/responses/Response401'
+
     post:
       tags: [groups]
       summary: 그룹 생성
@@ -1405,6 +1565,56 @@ paths:
         '404':
           $ref: '#/components/responses/Response404'
 
+  /api/groups/join:
+    post:
+      tags: [groups]
+      summary: 초대 코드로 그룹 참여
+      operationId: groupsJoin
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [invite_code]
+              properties:
+                invite_code:
+                  type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          group_id:
+                            type: string
+                            format: uuid
+                          member_id:
+                            type: string
+                            format: uuid
+                          group_role:
+                            $ref: '#/components/schemas/GroupRole'
+                          joined_at:
+                            type: string
+                            format: date-time
+        '400':
+          $ref: '#/components/responses/Response400'
+        '401':
+          $ref: '#/components/responses/Response401'
+        '403':
+          $ref: '#/components/responses/Response403'
+        '404':
+          $ref: '#/components/responses/Response404'
+
   /api/groups/{id}:
     get:
       tags: [groups]
@@ -1449,7 +1659,8 @@ paths:
                           member_count:
                             type: integer
                           my_role:
-                            $ref: '#/components/schemas/GroupRole'
+                            type: string
+                            enum: [OWNER, MANAGER, MEMBER]
                             nullable: true
                           created_at:
                             type: string
@@ -1588,6 +1799,128 @@ paths:
                           updated_at:
                             type: string
                             format: date-time
+        '400':
+          $ref: '#/components/responses/Response400'
+        '401':
+          $ref: '#/components/responses/Response401'
+        '403':
+          $ref: '#/components/responses/Response403'
+        '404':
+          $ref: '#/components/responses/Response404'
+
+    delete:
+      tags: [groups]
+      summary: 그룹 멤버 내보내기
+      description: OWNER 또는 MANAGER만 가능하며 OWNER는 내보낼 수 없음
+      operationId: groupsRemoveMember
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: memberId
+          in: path
+          required: true
+          description: group_members.id
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          member_id:
+                            type: string
+                            format: uuid
+                          status:
+                            type: string
+                            enum: [REMOVED]
+        '400':
+          $ref: '#/components/responses/Response400'
+        '401':
+          $ref: '#/components/responses/Response401'
+        '403':
+          $ref: '#/components/responses/Response403'
+        '404':
+          $ref: '#/components/responses/Response404'
+
+  /api/groups/{id}/dashboard:
+    get:
+      tags: [groups]
+      summary: 그룹 대시보드 조회
+      description: OWNER/MANAGER는 전체 구성원, MEMBER는 자신의 통계만 조회
+      operationId: groupsGetDashboard
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          group_id:
+                            type: string
+                            format: uuid
+                          scope:
+                            type: string
+                            enum: [all_members, self]
+                          members:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                group_member_id:
+                                  type: string
+                                  format: uuid
+                                user_id:
+                                  type: string
+                                  format: uuid
+                                group_role:
+                                  $ref: '#/components/schemas/GroupRole'
+                                nickname:
+                                  type: string
+                                  nullable: true
+                                profile_image_url:
+                                  type: string
+                                  nullable: true
+                                total_sessions:
+                                  type: integer
+                                total_study_seconds:
+                                  type: integer
+                                avg_focus_score:
+                                  type: number
+                                  nullable: true
+                                last_session_at:
+                                  type: string
+                                  format: date-time
+                                  nullable: true
         '400':
           $ref: '#/components/responses/Response400'
         '401':

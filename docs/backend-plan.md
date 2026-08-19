@@ -164,45 +164,49 @@
 
 ### 3-3. 그룹 및 관리자 기능
 
-- [ ]  **그룹 생성 API** — `POST /api/groups`
+> ✅ 완료 검증 (2026-08-17): Prisma schema/migration 검증, Jest 11/11, PostgreSQL·Redis 연동 E2E 72/72 통과
+
+- [✅]  **그룹 생성 API** — `POST /api/groups`
     - 생성자는 group_members에 group_role=OWNER로 자동 등록
     - groups.created_by_user_id 설정 (이력 보존용, 권한은 group_members 기준)
-- [ ]  **그룹 상세 조회 API** — `GET /api/groups/:id`
+- [✅]  **그룹 상세 조회 API** — `GET /api/groups/:id`
     - visibility 기준 접근 제어 (PUBLIC / PRIVATE)
-- [ ]  **그룹 목록 조회 API** — `GET /api/groups`
+- [✅]  **그룹 목록 조회 API** — `GET /api/groups`
     - 내가 속한 그룹 목록
-- [ ]  **그룹 초대 API** — `POST /api/groups/:id/invite`
+- [✅]  **그룹 초대 API** — `POST /api/groups/:id/invite`
     - group_role=OWNER 또는 MANAGER만 초대 가능
     - invite_code 생성, invitee_email 또는 invitee_user_id 지정
     - expires_at 설정 (기본 7일)
-- [ ]  **초대 코드로 그룹 참여 API** — `POST /api/groups/join`
+- [✅]  **초대 코드로 그룹 참여 API** — `POST /api/groups/join`
     - invite_code 유효성 및 만료 검증
     - 참여 시 group_members에 group_role=MEMBER로 등록
-- [ ]  **그룹 멤버 권한 변경 API** — `PATCH /api/groups/:id/members/:memberId`
+- [✅]  **그룹 멤버 권한 변경 API** — `PATCH /api/groups/:id/members/:memberId`
     - OWNER만 group_role 변경 가능
-- [ ]  **그룹 멤버 내보내기 API** — `DELETE /api/groups/:id/members/:memberId`
+- [✅]  **그룹 멤버 내보내기 API** — `DELETE /api/groups/:id/members/:memberId`
     - OWNER / MANAGER만 실행 가능, OWNER 본인 내보내기 불가
-- [ ]  **그룹 대시보드 조회 API** — `GET /api/groups/:id/dashboard`
+- [✅]  **그룹 대시보드 조회 API** — `GET /api/groups/:id/dashboard`
     - v_group_member_stats View 기반 구성원별 학습 통계
     - OWNER / MANAGER만 전체 구성원 데이터 조회, MEMBER는 자신 데이터만 조회
-- [ ]  **그룹 목표 생성 API** — `POST /api/groups/:id/goals`
+- [✅]  **그룹 목표 생성 API** — `POST /api/groups/:id/goals`
     - OWNER / MANAGER만 생성 가능
     - target_study_minutes, target_focus_score, start_date, end_date 설정
-- [ ]  **그룹 목표 목록 조회 API** — `GET /api/groups/:id/goals`
-- [ ]  **그룹 목표 배정 API** — `POST /api/groups/:id/goals/:goalId/assignees`
+- [✅]  **그룹 목표 목록 조회 API** — `GET /api/groups/:id/goals`
+- [✅]  **그룹 목표 배정 API** — `POST /api/groups/:id/goals/:goalId/assignees`
     - group_goal_assignees에 group_member_id 등록
     - 전체 구성원 대상(목표 배정 없음)과 특정 멤버 배정 구분
-- [ ]  **관리자 피드백 작성 API** — `POST /api/groups/:id/feedbacks`
+- [✅]  **관리자 피드백 작성 API** — `POST /api/groups/:id/feedbacks`
     - manager_member_id: JWT sub 기준 group_members 조회 (group_role=OWNER 또는 MANAGER 검증)
     - target_member_id, session_id(선택), content 저장
-- [ ]  **관리자 피드백 조회 API** — `GET /api/groups/:id/feedbacks`
+- [✅]  **관리자 피드백 조회 API** — `GET /api/groups/:id/feedbacks`
     - OWNER / MANAGER: 전체 피드백 조회
     - MEMBER: 자신이 받은 피드백만 조회
 
 ### 3-4. 공통
 
+> ✅ 완료 검증 (2026-08-19): Express 라우트·API 명세·Swagger 36/36 대조, Redocly OpenAPI lint 통과
+
 - [✅]  **전역 예외 처리 미들웨어** — 400 / 403 / 404 / 500 응답 표준화
-- [ ]  **Swagger 문서 정리** — 전체 API 엔드포인트 명세 완성
+- [✅]  **Swagger 문서 정리** — 전체 API 엔드포인트 명세 완성
 - [✅]  **프론트엔드 팀 API 연동 지원** — CORS 설정, 응답 포맷 통일
 
 ---
