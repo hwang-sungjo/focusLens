@@ -6,8 +6,23 @@ import ReportPage from './pages/ReportPage'
 import ProfilePage from './pages/ProfilePage'
 import ProtectedRoute from './ProtectedRoute'
 import RegisterPage from './pages/RegisterPage'
+import { useState } from 'react'
 
 function App() {
+    const handleLogout = async () => {
+    const token = localStorage.getItem('access_token')
+    try {
+      await fetch('http://localhost:3000/api/auth/logout', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+    } catch (err) {
+      // 서버 요청 실패해도 로컬 토큰은 지운다
+    }
+    localStorage.removeItem('access_token')
+    window.location.href = '/login'
+  }
+  
   return (
     <BrowserRouter>
       <nav className="flex gap-4 p-4 bg-gray-100">
@@ -17,6 +32,7 @@ function App() {
         <Link to="/session">세션</Link>
         <Link to="/reports">리포트</Link>
         <Link to="/profile">프로필</Link>
+        <button onClick={handleLogout} className="text-red-600">로그아웃</button>
       </nav>
 
       <Routes>
