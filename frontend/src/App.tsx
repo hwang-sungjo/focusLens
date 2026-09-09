@@ -4,6 +4,7 @@ import SessionPage from './pages/SessionPage'
 import DashboardPage from './pages/DashboardPage'
 import ReportPage from './pages/ReportPage'
 import ProfilePage from './pages/ProfilePage'
+import ProtectedRoute from './ProtectedRoute'
 
 function App() {
   return (
@@ -18,10 +19,38 @@ function App() {
 
       <Routes>
         <Route path="/login" element={<LoginPage />} />
-        <Route path="/dashboard" element={<DashboardPage />} />
-        <Route path="/session" element={<SessionPage />} />
-        <Route path="/reports" element={<ReportPage />} />
-        <Route path="/profile" element={<ProfilePage />} />
+        <Route
+          path="/dashboard"
+          element={
+            <ProtectedRoute>
+              <DashboardPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/session"
+          element={
+            <ProtectedRoute>
+              <SessionPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/reports"
+          element={
+            <ProtectedRoute>
+              <ReportPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/profile"
+          element={
+            <ProtectedRoute>
+              <ProfilePage />
+            </ProtectedRoute>
+          }
+        />
       </Routes>
     </BrowserRouter>
   )
