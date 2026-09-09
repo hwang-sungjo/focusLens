@@ -5,12 +5,14 @@ import DashboardPage from './pages/DashboardPage'
 import ReportPage from './pages/ReportPage'
 import ProfilePage from './pages/ProfilePage'
 import ProtectedRoute from './ProtectedRoute'
+import RegisterPage from './pages/RegisterPage'
 
 function App() {
   return (
     <BrowserRouter>
       <nav className="flex gap-4 p-4 bg-gray-100">
         <Link to="/login">로그인</Link>
+        <Link to="/register">회원가입</Link>
         <Link to="/dashboard">대시보드</Link>
         <Link to="/session">세션</Link>
         <Link to="/reports">리포트</Link>
@@ -19,6 +21,7 @@ function App() {
 
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/register" element={<RegisterPage />} />
         <Route
           path="/dashboard"
           element={
