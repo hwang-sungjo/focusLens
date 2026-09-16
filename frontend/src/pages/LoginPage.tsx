@@ -38,6 +38,7 @@ function LoginPage() {
       }
 
       localStorage.setItem('access_token', result.data.access_token)
+      localStorage.setItem('user_id', result.data.user_id)
       navigate('/dashboard')
     } catch (err) {
       setError('서버에 연결할 수 없습니다. 잠시 후 다시 시도해주세요.')
