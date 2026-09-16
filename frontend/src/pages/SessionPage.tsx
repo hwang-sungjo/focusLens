@@ -1,5 +1,13 @@
 import { useRef, useState, useEffect } from 'react'
 
+interface FocusResult {
+  focus_score: number
+  attention_state: 'FOCUSED' | 'NORMAL' | 'DISTRACTED'
+  gaze: number
+  blink: number
+  head: number
+}
+
 function SessionPage() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [error, setError] = useState('')
@@ -10,7 +18,8 @@ function SessionPage() {
   const [sessionError, setSessionError] = useState('')
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const [isCameraVisible, setIsCameraVisible] = useState(true)
-  const [latestScore, setLatestScore] = useState<number | null>(null)
+  const [latestResult, setLatestResult] = useState<FocusResult | null>(null)
+  const [showAlert, setShowAlert] = useState(false)
 
   useEffect(() => {
     let stream: MediaStream
@@ -67,7 +76,14 @@ function SessionPage() {
         })
         const result = await res.json()
         if (res.ok) {
-          setLatestScore(result.data.focus_score)
+          setLatestResult({
+            focus_score: result.data.focus_score,
+            attention_state: result.data.attention_state,
+            gaze,
+            blink,
+            head,
+          })
+          setShowAlert(result.data.attention_state === 'DISTRACTED')
         }
       } catch (err) {
         console.error('로그 전송 실패:', err)
@@ -167,10 +183,51 @@ function SessionPage() {
             <p className="text-3xl font-bold text-primary mt-3">
               {formatTime(elapsedSeconds)}
             </p>
-            {latestScore !== null && (
-              <p className="text-sm text-secondary mt-1">
-                현재 집중도 점수(임시값): {latestScore.toFixed(1)}점
-              </p>
+
+            {latestResult && (
+              <div className="mt-4">
+                <div className="flex items-center gap-3">
+                  <p className="text-5xl font-bold text-primary">
+                    {latestResult.focus_score.toFixed(0)}
+                  </p>
+                  <span
+                    className={`text-sm font-medium px-2 py-1 rounded ${
+                      latestResult.attention_state === 'FOCUSED'
+                        ? 'bg-green-100 text-green-700'
+                        : latestResult.attention_state === 'NORMAL'
+                        ? 'bg-yellow-100 text-yellow-700'
+                        : 'bg-red-100 text-red-700'
+                    }`}
+                  >
+                    {latestResult.attention_state === 'FOCUSED'
+                      ? '집중 상태'
+                      : latestResult.attention_state === 'NORMAL'
+                      ? '보통'
+                      : '집중 이탈'}
+                  </span>
+                </div>
+
+                <div className="mt-3 space-y-2">
+                  {[
+                    { label: 'Gaze', value: latestResult.gaze },
+                    { label: 'Blink', value: latestResult.blink },
+                    { label: 'Head', value: latestResult.head },
+                  ].map(({ label, value }) => (
+                    <div key={label}>
+                      <div className="flex justify-between text-xs text-secondary mb-1">
+                        <span>{label}</span>
+                        <span>{value.toFixed(0)}</span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2">
+                        <div
+                          className="bg-accent h-2 rounded-full"
+                          style={{ width: `${value}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
           </>
         )}
@@ -199,6 +256,12 @@ function SessionPage() {
           )}
         </div>
       </div>
+
+      {showAlert && (
+        <div className="fixed top-4 right-4 bg-red-600 text-white px-4 py-3 rounded-lg shadow-lg">
+          ⚠️ 집중이 흐트러졌어요! 자세를 확인해주세요.
+        </div>
+      )}
     </div>
   )
 }
