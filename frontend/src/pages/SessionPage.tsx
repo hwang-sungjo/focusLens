@@ -10,6 +10,7 @@ function SessionPage() {
   const [sessionError, setSessionError] = useState('')
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const [isCameraVisible, setIsCameraVisible] = useState(true)
+  const [latestScore, setLatestScore] = useState<number | null>(null)
 
   useEffect(() => {
     let stream: MediaStream
@@ -43,6 +44,39 @@ function SessionPage() {
 
     return () => clearInterval(interval)
   }, [sessionStatus])
+
+  // MediaPipe 연동 후 더미 값을 실제 gaze/blink/head/total 점수로 교체
+  useEffect(() => {
+    if (sessionStatus !== 'in_progress' || !sessionId) return
+
+    const sendDummyLog = async () => {
+      const token = localStorage.getItem('access_token')
+      const gaze = Math.random() * 100
+      const blink = Math.random() * 100
+      const head = Math.random() * 100
+      const total = (gaze * 0.4 + blink * 0.3 + head * 0.3)
+
+      try {
+        const res = await fetch(`http://localhost:3000/api/sessions/${sessionId}/log`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ gaze, blink, head, total }),
+        })
+        const result = await res.json()
+        if (res.ok) {
+          setLatestScore(result.data.focus_score)
+        }
+      } catch (err) {
+        console.error('로그 전송 실패:', err)
+      }
+    }
+
+    const logInterval = setInterval(sendDummyLog, 60000)
+    return () => clearInterval(logInterval)
+  }, [sessionStatus, sessionId])
 
   const formatTime = (totalSeconds: number) => {
     const minutes = Math.floor(totalSeconds / 60)
@@ -129,9 +163,16 @@ function SessionPage() {
         </button>
 
         {sessionStatus === 'in_progress' && (
-          <p className="text-3xl font-bold text-primary mt-3">
-            {formatTime(elapsedSeconds)}
-          </p>
+          <>
+            <p className="text-3xl font-bold text-primary mt-3">
+              {formatTime(elapsedSeconds)}
+            </p>
+            {latestScore !== null && (
+              <p className="text-sm text-secondary mt-1">
+                현재 집중도 점수(임시값): {latestScore.toFixed(1)}점
+              </p>
+            )}
+          </>
         )}
 
         <div className="mt-4 flex gap-3">
