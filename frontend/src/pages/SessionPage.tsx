@@ -124,6 +124,8 @@ function SessionPage() {
       setSessionId(result.data.session_id)
       setSessionStatus('in_progress')
       setElapsedSeconds(0)
+      setLatestResult(null)
+      setShowAlert(false)
     } catch (err) {
       setSessionError('서버에 연결할 수 없습니다.')
     }
@@ -148,6 +150,7 @@ function SessionPage() {
       }
 
       setSessionStatus('completed')
+      setShowAlert(false)
     } catch (err) {
       setSessionError('서버에 연결할 수 없습니다.')
     }
@@ -232,33 +235,37 @@ function SessionPage() {
           </>
         )}
 
-        <div className="mt-4 flex gap-3">
-          {sessionStatus === 'idle' && (
-            <button
-              onClick={handleStartSession}
-              className="bg-primary text-white rounded-lg px-4 py-2 hover:bg-secondary transition-colors"
-            >
-              세션 시작
-            </button>
-          )}
+        <div className="mt-4">
+          <div className="flex gap-3">
+            {(sessionStatus === 'idle' || sessionStatus === 'completed') && (
+              <button
+                onClick={handleStartSession}
+                className="bg-primary text-white rounded-lg px-4 py-2 hover:bg-secondary transition-colors"
+              >
+                세션 시작
+              </button>
+            )}
 
-          {sessionStatus === 'in_progress' && (
-            <button
-              onClick={handleEndSession}
-              className="bg-red-600 text-white rounded-lg px-4 py-2 hover:bg-red-700 transition-colors"
-            >
-              세션 종료
-            </button>
-          )}
+            {sessionStatus === 'in_progress' && (
+              <button
+                onClick={handleEndSession}
+                className="bg-red-600 text-white rounded-lg px-4 py-2 hover:bg-red-700 transition-colors"
+              >
+                세션 종료
+              </button>
+            )}
+          </div>
 
           {sessionStatus === 'completed' && (
-            <p className="text-primary font-medium">세션이 종료되었습니다. 수고하셨어요!</p>
+            <p className="text-primary font-medium mt-2">
+              세션이 종료되었습니다. 수고하셨어요!
+            </p>
           )}
         </div>
       </div>
 
       {showAlert && (
-        <div className="fixed top-4 right-4 bg-red-600 text-white px-4 py-3 rounded-lg shadow-lg">
+        <div className="fixed top-20 left-4 right-4 sm:left-auto sm:right-4 sm:w-max sm:whitespace-nowrap bg-red-600 text-white px-4 py-3 rounded-lg shadow-lg z-50">
           ⚠️ 집중이 흐트러졌어요! 자세를 확인해주세요.
         </div>
       )}
