@@ -89,25 +89,29 @@ function DashboardPage() {
 
           <div className="bg-surface rounded-xl shadow-md p-6 max-w-2xl">
             <p className="text-sm text-secondary mb-4">최근 7일 집중도 추이</p>
-            <Line
-              data={{
-                labels: data.daily_summaries.map((d) => d.date.slice(5)),
-                datasets: [
-                  {
-                    label: '평균 집중도',
-                    data: data.daily_summaries.map((d) => d.avg_focus_score),
-                    borderColor: '#5C3D2E',
-                    backgroundColor: '#C4956A',
-                    tension: 0.3,
+            <div className="relative w-full h-64">
+              <Line
+                data={{
+                  labels: data.daily_summaries.map((d) => d.date.slice(5)),
+                  datasets: [
+                    {
+                      label: '평균 집중도',
+                      data: data.daily_summaries.map((d) => d.avg_focus_score),
+                      borderColor: '#5C3D2E',
+                      backgroundColor: '#C4956A',
+                      tension: 0.3,
+                    },
+                  ],
+                }}
+                options={{
+                  responsive: true,
+                  maintainAspectRatio: false,
+                  scales: {
+                    y: { min: 0, max: 100 },
                   },
-                ],
-              }}
-              options={{
-                scales: {
-                  y: { min: 0, max: 100 },
-                },
-              }}
-            />
+                }}
+              />
+            </div>
           </div>
         </>
       )}
