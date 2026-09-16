@@ -168,57 +168,61 @@ function ReportPage() {
               {report.timeline.length === 0 ? (
                 <p className="text-sm text-secondary">기록된 데이터가 없습니다.</p>
               ) : (
-                <Line
-                  data={{
-                    labels: report.timeline.map((t) =>
-                      new Date(t.logged_at).toLocaleTimeString('ko-KR', {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })
-                    ),
-                    datasets: [
-                      {
-                        label: '집중도',
-                        data: report.timeline.map((t) => t.focus_score),
-                        borderColor: '#2E1D14',
-                        backgroundColor: '#2E1D14',
-                        borderWidth: 2,
-                        pointRadius: 3,
-                        tension: 0.3,
-                      },
-                      {
-                        label: 'Gaze',
-                        data: report.timeline.map((t) => t.gaze_score),
-                        borderColor: '#E6007E',
-                        backgroundColor: '#E6007E',
-                        borderWidth: 1.5,
-                        pointRadius: 2,
-                        tension: 0.3,
-                      },
-                      {
-                        label: 'Blink',
-                        data: report.timeline.map((t) => t.blink_score),
-                        borderColor: '#00B7EB',
-                        backgroundColor: '#00B7EB',
-                        borderWidth: 1.5,
-                        pointRadius: 2,
-                        tension: 0.3,
-                      },
-                      {
-                        label: 'Head',
-                        data: report.timeline.map((t) => t.head_score),
-                        borderColor: '#F4E600',
-                        backgroundColor: '#F4E600',
-                        borderWidth: 1.5,
-                        pointRadius: 2,
-                        tension: 0.3,
-                      },
-                    ],
-                  }}
-                  options={{
-                    scales: { y: { min: 0, max: 100 } },
-                  }}
-                />
+                <div className="relative w-full h-64">
+                  <Line
+                    data={{
+                      labels: report.timeline.map((t) =>
+                        new Date(t.logged_at).toLocaleTimeString('ko-KR', {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })
+                      ),
+                      datasets: [
+                        {
+                          label: '집중도',
+                          data: report.timeline.map((t) => t.focus_score),
+                          borderColor: '#2E1D14',
+                          backgroundColor: '#2E1D14',
+                          borderWidth: 2,
+                          pointRadius: 3,
+                          tension: 0.3,
+                        },
+                        {
+                          label: 'Gaze',
+                          data: report.timeline.map((t) => t.gaze_score),
+                          borderColor: '#E6007E',
+                          backgroundColor: '#E6007E',
+                          borderWidth: 1.5,
+                          pointRadius: 2,
+                          tension: 0.3,
+                        },
+                        {
+                          label: 'Blink',
+                          data: report.timeline.map((t) => t.blink_score),
+                          borderColor: '#00B7EB',
+                          backgroundColor: '#00B7EB',
+                          borderWidth: 1.5,
+                          pointRadius: 2,
+                          tension: 0.3,
+                        },
+                        {
+                          label: 'Head',
+                          data: report.timeline.map((t) => t.head_score),
+                          borderColor: '#F4E600',
+                          backgroundColor: '#F4E600',
+                          borderWidth: 1.5,
+                          pointRadius: 2,
+                          tension: 0.3,
+                        },
+                      ],
+                    }}
+                    options={{
+                      responsive: true,
+                      maintainAspectRatio: false,
+                      scales: { y: { min: 0, max: 100 } },
+                    }}
+                  />
+                </div>
               )}
             </div>
           </div>
