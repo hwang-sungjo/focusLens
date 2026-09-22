@@ -5,6 +5,8 @@
 > **인증 방식**: JWT Bearer Token (`Authorization: Bearer <access_token>`)  
 > **토큰 만료**: Access Token 1시간
 
+**구현 현황 (2026-09-22):** 아래 36개 API operation은 `backend/src/routes`에 구현돼 있으며 `docs/swagger.yaml`에 명세돼 있다. 인증은 Access Token만 지원하고 토큰 재발급 API는 없다. `GET /health`(DB·Redis 정상 시 200, 장애 시 503)와 `/api-docs`는 `/api` 밖의 백엔드 운영 경로다. AI 측 로그 API 클라이언트는 존재하지만 웹캠 측정 결과의 자동 전송은 아직 연결되지 않았다. 운영·통합 검증 상태는 `docs/backend-plan.md` Phase 4·5를 따른다.
+
 ---
 
 ## 1. 공통 규약
@@ -64,6 +66,8 @@
 ```
 focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 ```
+
+백엔드는 요청의 `total`이 위 계산값(소수 둘째 자리 반올림)과 0.01 이내로 일치하는지 확인하고 계산값을 저장한다. 현재 `ai/`에는 같은 가중치의 계산 함수와 API 클라이언트가 있지만, 1분 점수 집계와 실시간 전송 연결은 미구현이다.
 
 | 구간 | attention_state |
 | --- | --- |
@@ -245,7 +249,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 
 ### POST /api/sessions/:id/log
 
-분 단위 집중도 로그 저장. 동일 세션·동일 분(`logged_at`) 중복 전송을 차단한다.
+분 단위 집중도 로그 저장용 API. 현재 구현은 동일 세션의 60초 미만 재전송을 Redis로 차단하고, `logged_at`은 서버 수신 시각으로 기록한다. AI 측 실패 로그의 원래 측정 시각·재전송 정책은 통합 단계에서 확정해야 한다.
 
 | 항목 | 내용 |
 | --- | --- |
@@ -266,7 +270,8 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
   "gaze": 85.5,
   "blink": 72.0,
   "head": 90.0,
-  "total": 82.3
+  "total": 82.8,
+  "face_detected": true
 }
 ```
 
@@ -276,6 +281,9 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 | `blink` | float | 0~100, blink_score |
 | `head` | float | 0~100, head_score |
 | `total` | float | 0~100, focus_score (가중 합산값) |
+| `face_detected` | boolean (선택) | AI가 산출한 분 단위 얼굴 검출 상태. 생략 시 현재 백엔드는 `true`로 저장 |
+
+현재 AI API 클라이언트는 이 형태의 payload를 만들 수 있으나 웹캠 측정 루프에서 호출되지 않는다. 분 단위 `face_detected` 산출도 아직 구현되지 않았다.
 
 **Response `200`**
 
@@ -285,7 +293,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
   "data": {
     "log_id": "uuid",
     "logged_at": "2026-06-27T09:01:00.000Z",
-    "focus_score": 82.3,
+    "focus_score": 82.8,
     "attention_state": "FOCUSED",
     "face_detected": true
   },
@@ -298,6 +306,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 | 상태 | error 예시 |
 | --- | --- |
 | 400 | `"gaze, blink, head, total은 0~100 범위의 float여야 합니다"` |
+| 400 | `"total은 가중 합산값과 일치해야 합니다"` 또는 `face_detected` 타입 오류 |
 | 400 | `"1분 미만 중복 로그 전송입니다"` |
 | 401 | `"인증 토큰이 필요합니다"` |
 | 403 | `"해당 세션에 대한 권한이 없습니다"` |
@@ -456,7 +465,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
         "gaze_score": 85.5,
         "blink_score": 72.0,
         "head_score": 90.0,
-        "focus_score": 82.3,
+        "focus_score": 82.8,
         "attention_state": "FOCUSED",
         "face_detected": true
       }
@@ -522,7 +531,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
         "gaze_score": 85.5,
         "blink_score": 72.0,
         "head_score": 90.0,
-        "focus_score": 82.3,
+        "focus_score": 82.8,
         "attention_state": "FOCUSED"
       }
     ],
@@ -546,6 +555,8 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 ### GET /api/reports/weekly
 
 최근 7일 일별 평균 집중도 요약.
+`daily_summaries`는 데이터가 없는 날짜를 포함해 7개 날짜를 반환하며 해당 날짜 평균은 `null`이다. 기간 전체에 로그가 없으면 `weekly_avg_focus_score`도 `null`이다.
+아래 응답 예시는 `daily_summaries` 배열의 한 날짜만 보여준다.
 
 | 항목 | 내용 |
 | --- | --- |
@@ -600,6 +611,8 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 ### GET /api/reports/monthly
 
 기준일을 포함한 최근 30일의 일별 집중도 요약. `COMPLETED` 세션만 집계한다.
+`daily_summaries`는 데이터가 없는 날짜를 포함해 30개 날짜를 반환하며 해당 날짜 평균은 `null`이다. 기간 전체에 로그가 없으면 `monthly_avg_focus_score`도 `null`이다.
+아래 응답 예시는 `daily_summaries` 배열의 한 날짜만 보여준다.
 
 | 항목 | 내용 |
 | --- | --- |
