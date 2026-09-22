@@ -65,6 +65,8 @@
 focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 ```
 
+백엔드는 요청의 `total`이 위 계산값(소수 둘째 자리 반올림)과 0.01 이내로 일치하는지 확인하고 계산값을 저장한다. 현재 `ai/`에는 같은 가중치의 계산 함수와 API 클라이언트가 있지만, 1분 점수 집계와 실시간 전송 연결은 미구현이다.
+
 | 구간 | attention_state |
 | --- | --- |
 | ≥ 70 | `FOCUSED` |
@@ -245,7 +247,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 
 ### POST /api/sessions/:id/log
 
-분 단위 집중도 로그 저장. 동일 세션·동일 분(`logged_at`) 중복 전송을 차단한다.
+분 단위 집중도 로그 저장용 API. 현재 구현은 동일 세션의 60초 미만 재전송을 Redis로 차단하고, `logged_at`은 서버 수신 시각으로 기록한다. AI 측 실패 로그의 원래 측정 시각·재전송 정책은 통합 단계에서 확정해야 한다.
 
 | 항목 | 내용 |
 | --- | --- |
@@ -266,7 +268,8 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
   "gaze": 85.5,
   "blink": 72.0,
   "head": 90.0,
-  "total": 82.3
+  "total": 82.8,
+  "face_detected": true
 }
 ```
 
@@ -276,6 +279,9 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 | `blink` | float | 0~100, blink_score |
 | `head` | float | 0~100, head_score |
 | `total` | float | 0~100, focus_score (가중 합산값) |
+| `face_detected` | boolean (선택) | AI가 산출한 분 단위 얼굴 검출 상태. 생략 시 현재 백엔드는 `true`로 저장 |
+
+현재 AI API 클라이언트는 이 형태의 payload를 만들 수 있으나 웹캠 측정 루프에서 호출되지 않는다. 분 단위 `face_detected` 산출도 아직 구현되지 않았다.
 
 **Response `200`**
 
@@ -285,7 +291,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
   "data": {
     "log_id": "uuid",
     "logged_at": "2026-06-27T09:01:00.000Z",
-    "focus_score": 82.3,
+    "focus_score": 82.8,
     "attention_state": "FOCUSED",
     "face_detected": true
   },
@@ -298,6 +304,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 | 상태 | error 예시 |
 | --- | --- |
 | 400 | `"gaze, blink, head, total은 0~100 범위의 float여야 합니다"` |
+| 400 | `"total은 가중 합산값과 일치해야 합니다"` 또는 `face_detected` 타입 오류 |
 | 400 | `"1분 미만 중복 로그 전송입니다"` |
 | 401 | `"인증 토큰이 필요합니다"` |
 | 403 | `"해당 세션에 대한 권한이 없습니다"` |
@@ -456,7 +463,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
         "gaze_score": 85.5,
         "blink_score": 72.0,
         "head_score": 90.0,
-        "focus_score": 82.3,
+        "focus_score": 82.8,
         "attention_state": "FOCUSED",
         "face_detected": true
       }
@@ -522,7 +529,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
         "gaze_score": 85.5,
         "blink_score": 72.0,
         "head_score": 90.0,
-        "focus_score": 82.3,
+        "focus_score": 82.8,
         "attention_state": "FOCUSED"
       }
     ],

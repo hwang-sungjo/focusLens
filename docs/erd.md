@@ -43,6 +43,8 @@
 | concentration_logs | id(PK), session_id(FK), logged_at, gaze_score, blink_score, head_score, focus_score, attention_state, face_detected, created_at | 분 단위 집중도 타임라인 기록 |
 | reports | id(PK), session_id(FK, UNIQUE), summary_json, created_at | 세션 종료 후 생성되는 리포트 산출물 |
 
+AI 경계 (2026-09-22): `ai/`의 Python·MediaPipe 프로그램은 현재 프레임별 얼굴 검출, 시선·눈 깜빡임·머리 자세 특징을 추출하지만 웹캠 파이프라인에서 백엔드로 자동 전송하지 않는다. 프레임 원본·랜드마크·보정값을 저장하는 테이블은 이 ERD에 없다. 후속 1분 집계 결과만 `POST /api/sessions/:id/log`를 거쳐 `concentration_logs`에 저장하는 설계이며, 1분 집계 자체는 아직 미구현이다.
+
 ### 소셜 도메인
 
 | 테이블 | 주요 컬럼 | 설명 |

@@ -489,8 +489,9 @@ paths:
       tags: [sessions]
       summary: 집중도 로그 저장
       description: |
-        분 단위 로그. gaze/blink/head/total 0~100 검증.
-        UNIQUE(session_id, logged_at) 중복 차단.
+        분 단위 로그. gaze/blink/head/total 0~100 및 total 가중 합산값 일치 검증.
+        동일 세션의 60초 미만 재전송은 Redis로 차단하며 logged_at은 서버 수신 시각이다.
+        현재 AI 클라이언트에는 API 호출 코드가 있으나 웹캠 파이프라인과 연결되지 않았다.
       operationId: sessionsLog
       security:
         - BearerAuth: []
@@ -529,6 +530,9 @@ paths:
                   format: float
                   minimum: 0
                   maximum: 100
+                face_detected:
+                  type: boolean
+                  description: 선택. 생략 시 백엔드가 true로 저장한다. AI의 분 단위 산출은 아직 미구현.
       responses:
         '200':
           description: OK

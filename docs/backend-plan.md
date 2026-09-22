@@ -83,6 +83,8 @@
 ## Phase 3. MVP 핵심 개발
 
 > 📅 7/13 ~ 8/21 (5.5주)
+>
+> ✅ **전체 완료 (2026-08-19)** — 인증·세션·리포트·소셜·그룹·관리자 기능과 공통 API 기반 구현 완료. Prisma 스키마 및 마이그레이션, Jest 테스트, PostgreSQL·Redis 연동 E2E, 동시성·데이터 무결성, Swagger 36개 API 명세를 재검증함.
 
 ### 3-1. 인증 및 코어 기능
 
@@ -218,6 +220,8 @@
 
 > 📅 8/31 ~ 10/4 (5주)
 > 단위 테스트 작성, 보안 점검, Roll-up 스케줄러 구현, 통합 테스트 진행
+>
+> 진행 재분류 (2026-08-19): 검증용 React 프런트엔드에서 목업 데이터 기반 MVP 흐름을 수동 확인하고, 동일 흐름의 실제 API 통합 시나리오 및 데이터 무결성 검사를 통과함. 프로덕션 프런트엔드 E2E는 프런트 구현 후 별도 확인 필요.
 
 - [ ]  **인증 모듈 단위 테스트**
     - 정상 로그인, 잘못된 토큰, 만료 토큰 케이스
@@ -257,10 +261,13 @@
     - v_rankings Materialized View 전환 검토 — 랭킹 조회 빈도 높을 경우 적용
 - [ ]  **View 성능 검증** — v_session_share_reaction_counts, v_user_session_summaries, v_group_member_stats, v_rankings 각 실행 계획 확인
 - [ ]  **프론트엔드 통합 테스트 지원**
-    - 실제 프론트 연동 흐름 E2E 검증
-- [ ]  **통합 버그 수정**
+    - 검증용 MVP Quality Lab 구현 — 인증, 세션, 리포트, 소셜, 그룹, 랭킹 화면 및 API 콘솔
+    - 목업 사용자·집중도 데이터를 사용한 실제 API 통합 시나리오 통과, 사용자 수동 UI 검증 완료
+    - 프로덕션 프런트엔드 연동 흐름 E2E는 프런트 구현 후 별도 진행
+- [ ]  **AI 집중도 로그 통합 검증** — 로컬 AI 측정 결과의 1분 집계·JWT 전송을 실제 세션 시작/종료·리포트 흐름과 연결하고, 실패 재전송 및 측정 시각 정책 검증
+- [ ]  **통합 버그 수정** — 주간·월간 리포트 집계, 만료 그룹 초대 재발급, 동시성·관계 무결성 결함 수정 및 재검증
 - [ ]  **데이터 최적화** — 주간/월간 집계 쿼리 성능 재검증
-- [ ]  **API 문서 최종 업데이트** — Swagger 최종본
+- [✅]  **API 문서 최종 업데이트** — Swagger 36개 API 명세·Express 라우트 대조 및 OpenAPI lint 통과
 
 ---
 
@@ -299,11 +306,25 @@
 
 > Phase 1 시작 전 팀 미팅에서 확정 필요
 
-- [ ]  백엔드 언어: **Node.js (Express)** vs **Python (FastAPI)**
-- [ ]  ORM: **Prisma** (Node) vs **SQLAlchemy** (Python)
+- [✅]  백엔드 언어: **Node.js + Express** 확정
+- [✅]  ORM: **Prisma** 확정
 - [ ]  데이터베이스 호스팅: **Supabase** (빠른 셋업) vs **AWS RDS** (확장성)
-- [ ]  AI 추론 위치: **Client-side (MediaPipe.js)** vs **Server-side (FastAPI)**
-- [ ]  레포 구조: **모노레포** vs **멀티레포**
+- [ ]  AI 최종 실행 위치: 현재 구현은 **로컬 Python 클라이언트(OpenCV + MediaPipe Face Landmarker)**이며 브라우저 MediaPipe.js나 서버 FastAPI 서비스로 배치되지 않음. 제품 연동 방식은 별도 확정 필요
+- [✅]  레포 구조: **모노레포** 확정
+
+---
+
+## 📎 AI 구현 현황 (2026-09-22)
+
+> `ai/`는 백엔드와 분리된 Python 3.11 실행 프로그램이다. 이 현황표를 진행 상태의 기준으로 삼고, 구현 근거는 `ai/README.md` 및 소스 코드, 후속 설계는 `ai/FocusLens_focus_log_implementation_plan.md`에서 확인한다. 아래 상태는 백엔드 Phase 3 완료 여부와 별개다.
+
+- [✅] OpenCV 웹캠 입력, MediaPipe Face Landmarker 모델 자동 다운로드·초기화, 약 10 FPS 프레임 샘플링
+- [✅] 프레임별 얼굴 검출, 양쪽 홍채 상대 위치 기반 `gaze_x/gaze_y`, `eyeBlinkLeft/Right`와 단일 프레임 눈 감김, 변환 행렬 기반 `yaw/pitch/roll` 추출
+- [✅] 랜드마크·시선·머리 방향·수치 막대 디버그 화면과 프레임 측정값 JSON 출력
+- [✅] 가중치 0.4/0.3/0.3의 `total` 계산 함수 및 `POST /api/sessions/:id/log` 호출용 JWT API 클라이언트 구현 (실시간 측정 흐름과는 미연결)
+- [ ] 사용자별 gaze/head 보정, blink 이벤트·장시간 눈 감김 판정
+- [ ] 1분 버퍼, `gaze/blink/head` 점수 집계, 얼굴 검출 비율 기반 `face_detected` 산출
+- [ ] 실시간 측정→API 전송 연결, 실패 전송 재시도 큐, 실제 카메라·백엔드 통합 검증
 
 ---
 

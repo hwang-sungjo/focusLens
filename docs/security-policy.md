@@ -1,8 +1,10 @@
 # FocusLens API 보안 검증 정책
 
 > **기준 문서**: `docs/erd.md`, `docs/api-spec.md`, `docs/auth-flow.md`  
-> **응답 형식**: `{ success: false, data: null, error: "..." }`  
-> **공통 원칙**: 검증 실패 시 **400 / 403** 응답 + 서버 로그 기록 (user_id, path, reason)
+> **응답 형식**: `{ success: false, data: {}, error: "..." }`
+> **공통 원칙**: 검증 실패 시 **400 / 403** 응답. 구조화된 실패 로그(user_id, path, reason)는 Phase 4 점검 대상
+
+> **현재 로그 API 구현**: `backend/src/routes/sessions.js`에서 점수와 선택적 `face_detected`를 검증하고, `backend/src/controllers/sessionsController.js`에서 소유권·가중 합산값·Redis 60초 제한을 확인한다. `ai/`의 실시간 측정은 아직 이 API에 연결되지 않았다. ①·③은 현행 동작을 기술하며, 다른 절의 파일별 예시는 향후 분리 가능한 설계안이다.
 
 ---
 
@@ -23,24 +25,22 @@
 
 ```
 요청
-  → [④ HTTPS] (인프라 / Express)
+  → [④ HTTPS] (배포 시 인프라 구성)
   → [auth] JWT 검증 (401)
-  → [sessionOwner] ② 세션 소유 (403) — 세션 라우트
-  → [groupAuth] ⑤ 그룹 역할 (403) — 그룹 라우트
-  → [validateConcentrationLog] ① ③ — 로그 라우트
-  → 컨트롤러 — ⑥ 프라이버시·비즈니스 로직
+  → [sessions route] ① 점수·face_detected 검증 (400) — 로그 라우트
+  → [sessions controller] ② 소유자·상태·total 검증 (403/409/400)
+  → [Redis] ③ 세션별 60초 중복 전송 차단 (400)
+  → [controller] DB 저장 및 응답
 ```
 
-| 레이어 | 파일 (권장) | 담당 정책 |
+| 레이어 | 현재 파일 | 담당 정책 |
 | --- | --- | --- |
-| 인프라 | `nginx.conf` | ④ |
-| 미들웨어 | `src/middleware/auth.js` | JWT (선행 조건) |
-| 미들웨어 | `src/middleware/sessionOwner.js` | ② |
-| 미들웨어 | `src/middleware/groupAuth.js` | ⑤ |
-| 미들웨어 | `src/middleware/validateConcentrationLog.js` | ①, ③ |
-| 미들웨어 | `src/middleware/requireHttps.js` | ④ (Express 보조) |
-| 컨트롤러 / 서비스 | `src/controllers/sessionShareController.js` | ⑥ |
-| 컨트롤러 / 서비스 | `src/services/privacyService.js` | ⑥ |
+| 미들웨어 | `backend/src/middleware/auth.js` | JWT (선행 조건) |
+| 라우트 | `backend/src/routes/sessions.js` | ① 점수·`face_detected` 형식 |
+| 컨트롤러 | `backend/src/controllers/sessionsController.js` | ② 소유권, ① `total` 일치, ③ 잠금 호출 |
+| 서비스 | `backend/src/services/redis.js` | ③ 60초 중복 전송 차단 |
+
+④ HTTPS 배포 구성과 ⑤·⑥ 정책은 각 절 및 `docs/backend-plan.md`의 별도 구현·검증 범위를 따른다.
 
 ---
 
@@ -52,42 +52,16 @@ ERD: `concentration_logs` — `gaze_score`, `blink_score`, `head_score`, `focus_
 
 | 항목 | 내용 |
 | --- | --- |
-| **검증 위치** | **미들웨어** `validateConcentrationLog` (+ 유틸 `src/utils/focusScore.js`) |
+| **검증 위치** | `backend/src/routes/sessions.js` 입력 검증 + `backend/src/controllers/sessionsController.js`의 가중 합산값 확인 |
 | **적용 라우트** | `POST /api/sessions/:id/log` |
 | **실패 응답** | **400** — `"gaze, blink, head, total은 0~100 범위의 float여야 합니다"` |
 
-**구현 방향**
+**현행 구현**
 
-1. Request body 필드 `gaze`, `blink`, `head`, `total` 각각 `validateScore(value, fieldName)` 호출.
-2. `typeof value === 'number'`, `!Number.isNaN(value)`, `0 <= value <= 100` 확인.
-3. 문자열 `"85"` 등 암묵적 형변환 **허용하지 않음** (strict number).
-4. 검증 통과 후 `total`을 `focus_score`로 DB 저장; `calculateFocusScore`·`getAttentionState`로 `attention_state` 산출.
-5. `FocusScoreValidationError` catch → 400 + `logger.warn`.
-
-```javascript
-// src/middleware/validateConcentrationLog.js
-const { validateScore, calculateFocusScore, getAttentionState } = require('../utils/focusScore');
-
-function validateConcentrationLog(req, res, next) {
-  try {
-    const { gaze, blink, head, total } = req.body;
-    validateScore(gaze, 'gaze');
-    validateScore(blink, 'blink');
-    validateScore(head, 'head');
-    validateScore(total, 'total');
-    req.concentrationPayload = {
-      gaze_score: gaze,
-      blink_score: blink,
-      head_score: head,
-      focus_score: total,
-      attention_state: getAttentionState(total),
-    };
-    next();
-  } catch (err) {
-    return res.status(400).json({ success: false, data: null, error: err.message });
-  }
-}
-```
+1. `gaze`, `blink`, `head`, `total` 각각 `number`, 유한값, 0~100 범위를 확인한다. 문자열 숫자는 거부한다.
+2. `face_detected`는 선택적 boolean이며 생략 시 현재 컨트롤러는 `true`로 저장한다.
+3. 서버가 0.4/0.3/0.3 가중 합산값을 계산하고 요청의 `total`과 차이가 0.01을 넘으면 400을 반환한다. DB에는 서버 계산값을 저장한다.
+4. AI 측 1분 점수·분 단위 `face_detected` 산출은 아직 미구현이므로 실제 자동 전송 검증은 후속 통합 작업이다.
 
 ---
 
@@ -116,10 +90,10 @@ async function sessionOwner(req, res, next) {
   const sessionId = req.params.id || req.params.session_id;
   const session = await prisma.sessions.findUnique({ where: { id: sessionId } });
   if (!session) {
-    return res.status(404).json({ success: false, data: null, error: '세션을 찾을 수 없습니다' });
+    return res.status(404).json({ success: false, data: {}, error: '세션을 찾을 수 없습니다' });
   }
   if (session.user_id !== req.user.sub) {
-    return res.status(403).json({ success: false, data: null, error: '해당 세션에 대한 권한이 없습니다' });
+    return res.status(403).json({ success: false, data: {}, error: '해당 세션에 대한 권한이 없습니다' });
   }
   req.session = session;
   next();
@@ -134,30 +108,16 @@ ERD: `concentration_logs` — **UNIQUE(`session_id`, `logged_at`)**
 
 | 항목 | 내용 |
 | --- | --- |
-| **검증 위치** | **미들웨어** (사전 검사) + **컨트롤러** (INSERT 시 DB 제약 활용) |
+| **검증 위치** | `backend/src/services/redis.js`의 `SET NX` 잠금 + 세션 컨트롤러 |
 | **적용 라우트** | `POST /api/sessions/:id/log` |
 | **실패 응답** | **400** — `"1분 미만 중복 로그 전송입니다"` |
-| **DB 충돌** | Prisma `P2002` → 동일 400 메시지로 매핑 |
+| **DB 제약** | `(session_id, logged_at)` UNIQUE는 존재하지만 현재 중복 요청의 주된 차단 수단은 Redis 60초 잠금 |
 
-**구현 방향**
+**현행 구현**
 
-1. **`logged_at` 정규화**: 서버 기준 `date_trunc('minute', NOW())` 또는 요청 시각을 분 단위로 floor.
-2. **미들웨어 사전 검사**: 동일 `session_id` + `logged_at`(분) 레코드 EXISTS → 400 (DB round-trip 절약).
-3. **INSERT**: `logged_at`을 분 단위로 저장해 UNIQUE 제약과 정합.
-4. **Race condition**: 동시 요청 시 UNIQUE 위반(`P2002`) catch → 400 동일 메시지.
-5. 1분 **미만**이 아니라 **동일 분** 중복 차단 — ERD `logged_at` 분 단위 타임라인과 일치.
-
-```javascript
-// logged_at: 분 단위 버킷
-const loggedAt = startOfMinute(new Date());
-
-const exists = await prisma.concentration_logs.findUnique({
-  where: { session_id_logged_at: { session_id: sessionId, logged_at: loggedAt } },
-});
-if (exists) {
-  return res.status(400).json({ success: false, data: null, error: '1분 미만 중복 로그 전송입니다' });
-}
-```
+1. `session-log-rate:{sessionId}` 키를 Redis `SET NX EX 60`으로 획득한다. 실패 시 400을 반환한다.
+2. `logged_at`은 서버 수신 시각 `new Date()`로 저장하며 분 단위로 절삭하지 않는다.
+3. DB INSERT 실패 시 Redis 잠금을 해제한다. 재전송 큐를 구현할 때는 원래 측정 시각과 중복 처리 정책을 별도로 확정해야 한다.
 
 ---
 
@@ -198,7 +158,7 @@ function requireHttps(req, res, next) {
   if (process.env.NODE_ENV !== 'production') return next();
   const proto = req.headers['x-forwarded-proto'] || req.protocol;
   if (proto !== 'https') {
-    return res.status(403).json({ success: false, data: null, error: 'HTTPS required' });
+    return res.status(403).json({ success: false, data: {}, error: 'HTTPS required' });
   }
   next();
 }
@@ -255,7 +215,7 @@ function groupAuth(...allowedRoles) {
       where: { group_id: req.params.id, user_id: req.user.sub, status: 'ACTIVE' },
     });
     if (!member || !allowedRoles.includes(member.group_role)) {
-      return res.status(403).json({ success: false, data: null, error: '…' });
+      return res.status(403).json({ success: false, data: {}, error: '…' });
     }
     req.groupMember = member;
     next();
@@ -357,7 +317,7 @@ WHERE ss.deleted_at IS NULL
 | --- | --- |
 | ① | `-1`, `101`, `"80"`, `NaN` → 400 |
 | ② | 타인 `session_id` → 403 |
-| ③ | 동일 분 2회 POST → 400 |
+| ③ | 동일 세션에서 60초 미만 2회 POST → 400 |
 | ④ | `X-Forwarded-Proto: http` (prod) → 403 |
 | ⑤ | MEMBER가 invite 시도 → 403; `created_by_user_id`만 일치 + role MEMBER → 403 |
 | ⑥ | `default_session_scope=PRIVATE` + `share_scope=PUBLIC` → 403; feed에서 scope 초과 share 미노출 |
@@ -366,8 +326,8 @@ WHERE ss.deleted_at IS NULL
 
 ## 6. 구현 체크리스트
 
-- [ ] `src/utils/focusScore.js` — ① 검증 재사용
-- [ ] `src/middleware/validateConcentrationLog.js` — ①③
+- [✅] `backend/src/routes/sessions.js` + `backend/src/controllers/sessionsController.js` — ① 점수·`face_detected` 형식과 가중 합산값 검증
+- [✅] `backend/src/services/redis.js` — ③ 세션별 60초 중복 전송 차단
 - [ ] `src/middleware/sessionOwner.js` — ②
 - [ ] `src/middleware/groupAuth.js` — ⑤
 - [ ] `src/services/privacyService.js` — ⑥ scope 순위 비교

@@ -190,6 +190,8 @@ JWT sub → sessions.id = :id 조회 → sessions.user_id === sub ?
   NO  → 403 "해당 세션에 대한 권한이 없습니다"
 ```
 
+현재 `ai/`에는 JWT를 전달받아 위 로그 API를 호출하는 Python 클라이언트 코드가 있다. 다만 웹캠 측정 루프와 연결되지 않았으며 자동 로그인·토큰 갱신도 구현되지 않았다. 실제 AI 측 자동 전송의 인증 흐름은 `docs/backend-plan.md` Phase 4 통합 검증 대상으로 남아 있다.
+
 ---
 
 ## 5. 로그아웃 — Redis 블랙리스트
@@ -307,7 +309,7 @@ Access Token 만료(1시간) 또는 무효 토큰 시 서버는 **401**을 반�
 ```json
 {
   "success": false,
-  "data": null,
+  "data": {},
   "error": "만료되었거나 유효하지 않은 토큰입니다"
 }
 ```

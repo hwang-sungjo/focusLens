@@ -76,10 +76,27 @@
 
 ## 🤖 AI 개발 팀 전달 사항
 
+### 현재 AI 실행 프로그램 (2026-09-22)
+
+`ai/`에는 Python 3.11 기반 로컬 웹캠 측정 프로그램이 구현돼 있다. OpenCV와 MediaPipe Face Landmarker로 약 10 FPS의 프레임을 처리하며, 얼굴 검출, 홍채 상대 위치, blink blendshape·단일 프레임 눈 감김, yaw/pitch/roll을 출력한다. 디버그 화면과 프레임별 JSON 출력이 가능하다. 진행 상태는 `docs/backend-plan.md`의 AI 현황표를 기준으로 하고, 실행 세부 사항은 `ai/README.md`를 참조한다.
+
+```bash
+cd ai
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[dev]'
+focuslens-ai --print-values
+```
+
+첫 실행 시 Face Landmarker 모델을 `ai/models/face_landmarker.task`로 내려받는다. 미리보기 창은 `q` 또는 `ESC`로 닫는다. `FOCUSLENS_MODEL_PATH`로 모델 경로를 바꿀 수 있다.
+
+현재 `total` 계산 함수와 JWT 로그 API 클라이언트는 구현돼 있지만, 사용자별 보정·blink 이벤트·1분 점수 집계와 웹캠→API 전송 연결은 아직 없다. `FOCUSLENS_API_BASE_URL`, `FOCUSLENS_ACCESS_TOKEN`은 후속 연동용이며 현재 `focuslens-ai` 실행 명령은 이를 사용해 로그를 자동 전송하지 않는다.
+
 1. **AI 추론 결과 저장 테이블 (`concentration_logs`)**
    - AI 모델이 계산한 집중도 점수는 `concentration_logs` 테이블에 저장됩니다.
    - **제약 조건:** `focus_score`, `gaze_score`, `blink_score`, `head_score`는 모두 `0` 이상 `100` 이하의 Float 값이어야 합니다.
    - **상태 값:** `attention_state` 컬럼은 `FOCUSED`, `NORMAL`, `DISTRACTED` 세 가지 Enum 값만 허용됩니다.
+   - DB 저장은 백엔드의 `POST /api/sessions/:id/log`를 통해 수행한다. 요청에는 JWT와 `gaze`, `blink`, `head`, `total`, 선택적 `face_detected`를 보낸다. `total`은 0.4/0.3/0.3 가중 합산값이어야 하며, 현재 백엔드는 수신 시각을 `logged_at`으로 저장하고 동일 세션 60초 미만 전송을 차단한다. 현재 AI 실행 프로그램은 아직 이 요청을 자동으로 보내지 않는다.
 
 2. **파생 데이터(통계, 랭킹) 조회 원칙**
    - 평균 집중도, 총 학습 시간 등의 집계 데이터는 기본 테이블에 저장하지 않고 **미리 생성된 View를 통해 조회**합니다. AI 모델 결과 평가나 통계 추출 시 아래 View를 활용해 주세요.

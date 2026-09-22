@@ -67,8 +67,8 @@
 | **기능명** | 분 단위 집중도 로그 저장 |
 | **행위 주체** | 세션 소유자 (인증된 사용자) |
 | **사전 조건** | JWT 유효. `sessions.id = :id` 존재. `sessions.user_id = JWT sub`. `sessions.status = IN_PROGRESS` |
-| **처리 흐름** | 1. `POST /api/sessions/:id/log` — `{ gaze, blink, head, total }` 수신<br>2. 미들웨어: 각 점수 0~100 float 검증 (`focusScore.js`)<br>3. 미들웨어: `sessions.user_id = sub` 소유자 검증<br>4. `logged_at = date_trunc('minute', NOW())` 정규화<br>5. 동일 `(session_id, logged_at)` 존재 여부 확인 (UNIQUE 사전 검사)<br>6. `focus_score = total`, `attention_state` = S 기준 판별 (≥70 FOCUSED, 40~69 NORMAL, <40 DISTRACTED)<br>7. `concentration_logs` INSERT<br>8. `200` + `log_id`, `logged_at`, `focus_score`, `attention_state` 반환 |
-| **예외 처리** | 점수 범위 위반 → **400**<br>동일 분 중복 → **400** `"1분 미만 중복 로그 전송입니다"`<br>JWT 없음 → **401**<br>소유자 불일치 → **403**<br>세션 없음 → **404**<br>종료된 세션 → **409**<br>UNIQUE DB 충돌 (동시 요청) → **400** |
+| **처리 흐름** | 1. `POST /api/sessions/:id/log` — `{ gaze, blink, head, total, face_detected? }` 수신<br>2. 라우트에서 각 점수의 숫자·유한성·0~100 범위와 선택적 `face_detected`의 boolean 타입 검증<br>3. 컨트롤러에서 `sessions.user_id = JWT sub`, 진행 중 상태 검증<br>4. 서버에서 `total`이 0.4/0.3/0.3 가중 합산값과 일치하는지 검증<br>5. Redis `SET NX`로 동일 세션의 60초 미만 재전송 차단<br>6. 서버 수신 시각을 `logged_at`으로 저장하고, 계산한 `focus_score`로 `attention_state` 판별 (≥70 FOCUSED, 40~69 NORMAL, <40 DISTRACTED)<br>7. `concentration_logs` INSERT<br>8. `200` + `log_id`, `logged_at`, `focus_score`, `attention_state`, `face_detected` 반환. `face_detected` 미전송 시 현재 기본값은 `true` |
+| **예외 처리** | 점수·`face_detected` 형식 오류 또는 `total` 불일치 → **400**<br>60초 미만 중복 전송 → **400** `"1분 미만 중복 로그 전송입니다"`<br>JWT 없음 → **401**<br>소유자 불일치 → **403**<br>세션 없음 → **404**<br>종료된 세션 → **409** |
 
 ---
 
@@ -81,6 +81,14 @@
 | **사전 조건** | JWT 유효. `sessions.status = IN_PROGRESS`. `sessions.user_id = JWT sub` |
 | **처리 흐름** | 1. `POST /api/sessions/:id/end` 요청<br>2. 소유자 검증 후 `sessions` UPDATE (`ended_at=NOW()`, `status=COMPLETED`)<br>3. `concentration_logs` 집계 → gaze/blink/head/focus 평균, duration(`ended_at-started_at`), 상태별 분 수<br>4. `reports` INSERT (`session_id` UNIQUE, `summary_json`에 통계 저장)<br>5. `200` + `session_id`, `report_id`, `summary` 반환 |
 | **예외 처리** | JWT 없음 → **401**<br>소유자 불일치 → **403**<br>세션 없음 → **404**<br>이미 종료 → **409**<br>리포트 생성 실패 → **500** (세션 상태 롤백) |
+
+---
+
+### 2.4 AI 측정 클라이언트 구현 현황 (2026-09-22)
+
+`ai/`는 Python 3.11·OpenCV·MediaPipe Face Landmarker를 사용하는 로컬 실행 프로그램이다. 현재 약 10 FPS로 웹캠 프레임을 추론하며, 얼굴 검출 여부, 양쪽 홍채의 눈 내부 상대 위치(`gaze_x`, `gaze_y`), 양쪽 blink blendshape와 단일 프레임 눈 감김, 변환 행렬의 `yaw/pitch/roll`을 추출한다. 실시간 디버그 화면과 프레임별 JSON 출력을 제공한다. 가중 합산 `total` 함수와 JWT를 사용하는 로그 API 클라이언트도 각각 구현돼 있다.
+
+사용자별 gaze/head 보정, blink 이벤트·장시간 눈 감김 판정, 1분 버퍼와 `gaze/blink/head` 점수 집계, 얼굴 검출 비율 기반 분 단위 `face_detected`, 실패 재전송 큐는 아직 구현되지 않았다. 웹캠 파이프라인은 API 클라이언트를 호출하지 않으므로 실제 세션 로그의 자동 전송도 아직 동작하지 않는다. 진행 상태는 `docs/backend-plan.md`의 AI 현황표와 이 절을 기준으로 하고, `ai/README.md`와 `ai/FocusLens_focus_log_implementation_plan.md`는 구현·후속 설계 자료로 참조한다.
 
 ---
 
