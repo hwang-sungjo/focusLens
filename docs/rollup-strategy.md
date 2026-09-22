@@ -12,6 +12,8 @@ FocusLens는 학습 세션마다 **분 단위** `concentration_logs`를 저장�
 
 현재 `ai/`는 웹캠 프레임별 특징 추출 단계이며 1분 집계와 자동 API 전송이 연결되지 않았다. 이 문서는 AI 로그 유입 이후의 데이터 보관 전략을 정의하며, roll-up 테이블과 스케줄러 역시 아직 구현되지 않았다.
 
+현재 백엔드는 세션 상세·리포트·피드·랭킹·그룹 통계에서 `concentration_logs` 또는 이를 읽는 View를 사용한다. Roll-up을 구현하면서 원본을 삭제하려면 이 조회 경로도 집계 테이블을 포함하도록 먼저 변경하고, 원본 삭제 전후의 평균·건수·권한별 응답을 검증해야 한다. 기존 View 4개만으로는 원본 삭제 후 과거 통계가 유지되지 않는다.
+
 추가로 `hourly_stats` → `daily_stats` → `weekly_stats` 단계적 압축을 통해 장기 보관 구간의 row 수를 줄인다.
 
 | 구분 | 대상 | Roll-up | 물리 삭제 |
@@ -20,6 +22,8 @@ FocusLens는 학습 세션마다 **분 단위** `concentration_logs`를 저장�
 | 집중도 집계 | `hourly_stats`, `daily_stats`, `weekly_stats` | ✅ (상위 tier로) | ✅ (상위 tier 집계 확인 후) |
 | 소셜 | `session_shares`, `session_reactions` | ❌ | ❌ (소프트 딜리트만) |
 | 세션·리포트 | `sessions`, `reports` | ❌ | ❌ |
+
+이 표의 ✅/❌는 **설계상 적용 여부**이며 구현 완료 표시가 아니다. 현재 Roll-up 잡과 집계 테이블은 없다.
 
 > ERD 원칙: `sessions`에 `avg_focus_score`, `duration_seconds` 저장 금지 — 집계 값은 roll-up 테이블 또는 조회 시 계산.
 

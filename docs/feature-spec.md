@@ -4,6 +4,23 @@
 > **응답 형식**: `{ success, data, error }`  
 > **권한 원칙**: 그룹 API는 `group_members.group_role` 기준, 세션 API는 JWT `sub` = `sessions.user_id`
 
+### 구현 범위 요약 (2026-09-22)
+
+아래는 `backend/src/routes`와 `docs/swagger.yaml`의 현행 36개 operation을 도메인별로 묶은 것이다. 세부 요청·응답은 `docs/api-spec.md`를 따른다.
+
+| 도메인 | 구현된 API 범위 | operation 수 |
+| --- | --- | ---: |
+| 인증 | 회원가입·로그인·로그아웃. 1시간 Access Token과 Redis 블랙리스트; Refresh Token API 없음 | 3 |
+| 세션 | 시작·로그 저장·종료·목록·상세 | 5 |
+| 리포트 | 세션별·주간·월간 조회 | 3 |
+| 사용자 | 공개 프로필 조회·내 프로필 수정·프라이버시 조회/수정 | 4 |
+| 친구 | 요청·수락/거절/취소·친구/대기 요청 조회 | 3 |
+| 공유 | 세션 공유·피드·공감 추가/취소 | 4 |
+| 랭킹 | 전체·친구·그룹 범위의 일간/주간 집중도·학습시간 | 1 |
+| 그룹 | 그룹 생성/목록/상세, 초대·참여, 멤버 역할/내보내기, 대시보드, 목표 생성/목록/배정, 피드백 작성/조회 | 13 |
+
+이 표는 라우트 구현 범위다. AI의 1분 점수 자동 전송, 제품 프런트엔드 E2E, Roll-up과 배포 검증은 `docs/backend-plan.md` Phase 4·5에 남아 있다.
+
 ---
 
 ## 1. 인증 (Auth)
@@ -54,7 +71,7 @@
 | --- | --- |
 | **기능명** | 학습 세션 시작 |
 | **행위 주체** | 인증된 사용자 |
-| **사전 조건** | JWT 유효. 동일 사용자의 `IN_PROGRESS` 세션이 없음 (정책에 따라 1개 제한) |
+| **사전 조건** | JWT 유효. 동일 사용자의 `IN_PROGRESS` 세션이 없음 (DB 부분 UNIQUE 인덱스로 1개 제한) |
 | **처리 흐름** | 1. `POST /api/sessions/start` — JWT `sub`에서 `user_id` 추출<br>2. `sessions` INSERT (`user_id`, `started_at=NOW()`, `status=IN_PROGRESS`)<br>3. `201` + `session_id`, `started_at`, `status` 반환 |
 | **예외 처리** | JWT 없음/만료 → **401**<br>이미 진행 중인 세션 존재 → **409**<br>DB 오류 → **500** |
 
@@ -114,7 +131,7 @@
 | **행위 주체** | 인증된 사용자 (본인 데이터) |
 | **사전 조건** | JWT 유효 |
 | **처리 흐름** | 1. `GET /api/reports/weekly` — 선택 `end_date` (기본 오늘)<br>2. 기준일 포함 최근 7일 범위 산출<br>3. JWT `sub` 사용자의 `COMPLETED` 세션 + `concentration_logs` 집계<br>4. 일별 `session_count`, `total_study_seconds`, `avg_focus_score` 계산<br>5. 주간 평균 집중도·총 학습 시간 합산<br>6. `200` + `period`, `daily_summaries`, `weekly_avg_focus_score`, `weekly_total_study_seconds` |
-| **예외 처리** | JWT 없음 → **401**<br>`end_date` 형식 오류 → **400**<br>해당 기간 세션 없음 → **200** (빈 `daily_summaries`, 0 값) |
+| **예외 처리** | JWT 없음 → **401**<br>`end_date` 형식 오류 → **400**<br>해당 기간 세션 없음 → **200** (7개 날짜의 `daily_summaries`, 각 `session_count=0`, `total_study_seconds=0`, `avg_focus_score=null`; `weekly_avg_focus_score=null`) |
 
 ---
 
@@ -138,7 +155,7 @@
 | --- | --- |
 | **기능명** | 친구 요청 수락·거절·취소 |
 | **행위 주체** | 수신자(수락/거절) 또는 요청자(취소) |
-| **사전 조건** | JWT 유휴. `user_connection_requests.status = PENDING`. 처리 권한: 수락/거절 → `receiver_user_id = sub`, 취소 → `requester_user_id = sub` |
+| **사전 조건** | JWT 유효. `user_connection_requests.status = PENDING`. 처리 권한: 수락/거절 → `receiver_user_id = sub`, 취소 → `requester_user_id = sub` |
 | **처리 흐름** | 1. `PATCH /api/connections/:id` — `{ status }` 수신<br>2. 요청 레코드 조회 및 권한·상태 검증<br>3. `ACCEPTED`: `user_connection_requests` UPDATE + `user_connections` INSERT (`user_a_id`, `user_b_id` 정렬)<br>4. `REJECTED` / `CANCELLED`: 요청 상태 UPDATE만<br>5. `200` + `request_id`, `status`, `connection_id`(수락 시) |
 | **예외 처리** | 잘못된 status → **400**<br>JWT 없음 → **401**<br>권한 없음 → **403**<br>요청 없음 → **404**<br>이미 처리됨 → **409** |
 
@@ -243,7 +260,7 @@
 | **기능명** | 그룹 학습 목표 생성 |
 | **행위 주체** | 그룹 OWNER 또는 MANAGER |
 | **사전 조건** | JWT 유효. `group_members.group_role IN (OWNER, MANAGER)`, `status=ACTIVE` |
-| **처리 흐름** | 1. `POST /api/groups/:id/goals` — `title`, `description`, `target_study_minutes`, `target_focus_score`, `start_date`, `end_date`<br>2. `groupAuth` 미들웨어로 역할 검증<br>3. `target_focus_score` 0~100 검증 (있을 경우)<br>4. `group_goals` INSERT (`created_by_member_id` = 요청자 `group_members.id`)<br>5. `201` + `goal_id`, 목표 상세 |
+| **처리 흐름** | 1. `POST /api/groups/:id/goals` — `title`, `description`, `target_study_minutes`, `target_focus_score`, `start_date`, `end_date`<br>2. 라우트 입력 검증 후 그룹 컨트롤러에서 `group_members.group_role` 확인<br>3. `target_focus_score` 0~100 검증 (있을 경우)<br>4. `group_goals` INSERT (`created_by_member_id` = 요청자 `group_members.id`)<br>5. `201` + `goal_id`, 목표 상세 |
 | **예외 처리** | 필수 필드 누락 → **400**<br>target_focus_score 범위 위반 → **400**<br>end_date < start_date → **400**<br>JWT 없음 → **401**<br>MEMBER 또는 비구성원 → **403**<br>그룹 없음 → **404** |
 
 ---

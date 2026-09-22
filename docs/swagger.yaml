@@ -2,9 +2,11 @@ openapi: 3.0.3
 info:
   title: FocusLens API
   description: |
-    FocusLens 백엔드 Phase 3 MVP REST API.
+    FocusLens 백엔드 Phase 3 MVP REST API (36개 operation 구현).
     기준 문서: `docs/api-spec.md`
     공통 응답: `{ success, data, error }`
+    JWT Access Token만 사용하며 토큰 재발급 API는 없다.
+    AI 웹캠 측정 결과의 자동 로그 전송은 아직 연결되지 않았다.
   version: 1.0.0
   license:
     name: Project repository terms

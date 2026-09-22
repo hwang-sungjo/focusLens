@@ -9,6 +9,18 @@
 | M3 | 내부 통합 검증 | 단위 테스트 통과, 보안 점검 완료, 프론트 연동 확인 | 10/4 |
 | M4 | 프로덕션 배포 완료 | AWS 라이브, CI/CD 작동, 모니터링 정상 | 10/25 |
 
+### 구현 상태 기준 (2026-09-22)
+
+| 영역 | 현재 코드로 확인한 범위 | 남은 범위 |
+| --- | --- | --- |
+| Backend API | Express 라우터 8개 도메인, OpenAPI 36개 operation: 인증, 세션·로그, 리포트, 프로필·프라이버시, 친구, 공유·공감, 랭킹, 그룹·목표·피드백 | Phase 4 보안·성능·실제 프런트/AI 연동 검증 |
+| 데이터 계층 | Prisma 모델 16개, 마이그레이션, 시드, 조회용 View 4개, PostgreSQL·Redis 연결 코드 | Roll-up 집계 테이블·스케줄러 및 원본 삭제 후 조회 정합성 |
+| AI | 로컬 Python·MediaPipe 프레임 특징 추출, 디버그 화면, 가중 `total` 계산 함수, 별도 로그 API 클라이언트 | 보정, blink 이벤트, 1분 집계, 웹캠→API 연결, 재시도 큐 |
+| 검증 | 이번 점검에서 Backend Jest 5 suite·19 test 통과. AI 테스트 파일 5개 확인 | AI pytest 실행 환경과 실제 카메라·DB·Redis E2E 재검증. 과거 문서의 E2E 기록은 이번 점검 결과와 구분 |
+| 운영 | Docker Compose·환경변수 예시·`/health`·Swagger UI 구성 | Phase 5 AWS·CI/CD·HTTPS·모니터링 |
+
+> 완료 표시는 기능 코드의 구현 상태를 뜻한다. Phase 4의 테스트·보안·운영 검증 완료를 뜻하지 않는다. 제품 프런트엔드 소스는 현재 저장소에 추적되지 않으며, 이전 검증용 UI 기록은 프로덕션 프런트엔드 연동 완료 근거가 아니다.
+
 ---
 
 ## Phase 1. 상세 기획 및 설계
@@ -58,11 +70,11 @@
 - [✅]  **Docker / docker-compose 설정**
     - 서비스 구성: backend + postgres + redis
     - `.env.example` 작성 및 팀 공유
-- [✅]  **Express / FastAPI 서버 초기 세팅**
-    - 최종 언어 확정: Node.js + Express **또는** Python + FastAPI
-    - 디렉토리 구조: `src/routes`, `src/controllers`, `src/middleware`, `src/models`
+- [✅]  **Node.js + Express 서버 초기 세팅**
+    - 백엔드 런타임은 Node.js + Express, ORM은 Prisma로 확정
+    - 디렉토리 구조: `backend/src/routes`, `backend/src/controllers`, `backend/src/middleware`, `backend/src/models`
 - [✅]  **PostgreSQL 연결 & 전체 스키마 migration 실행**
-    - Prisma (Node) 또는 SQLAlchemy (Python) 설정
+    - Prisma 설정
     - 코어: users, sessions, concentration_logs, reports 테이블 생성
     - 소셜: user_profiles, user_privacy_settings, user_connection_requests, user_connections, session_shares, session_reactions 테이블 생성
     - 그룹: groups, group_members, group_invitations, group_goals, group_goal_assignees, manager_feedbacks 테이블 생성
@@ -71,11 +83,11 @@
 - [✅]  **조회용 View 초안 생성**
     - `v_session_share_reaction_counts` — session_reactions를 session_share_id, reaction_type 기준 집계
     - `v_user_session_summaries` — sessions, concentration_logs, reports 조인 세션 요약
-    - `v_group_member_stats` — 그룹 구성원별 기간별 학습 통계
+    - `v_group_member_stats` — 그룹 구성원별 완료 세션 누적 학습 통계 (현재 기간 필터 없음)
     - `v_rankings` — ranking_participation=true 사용자 대상 집중도/학습시간 집계
 - [✅]  **환경변수(.env) 관리 구조 설정** — 로컬 / 개발 / 프로덕션 템플릿 분리 (`backend/.env.*.example`), 실제 비밀값은 Git 제외
 - [✅]  **기본 라우터 구조 생성** — 각 도메인별 라우터 파일 분리 (auth / sessions / reports / social / groups)
-- [✅]  **Health check API 확인** — `GET /health` → 200 응답
+- [✅]  **Health check API 구현** — `GET /health`: PostgreSQL·Redis 모두 연결 시 200, 하나라도 끊기면 503
 - [✅]  **Git repo 구조 및 브랜치 규칙 팀 확인**
 
 ---
@@ -101,7 +113,7 @@
     - JWT access token 발급 (만료 1시간)
     - bcrypt 비밀번호 검증
 - [✅]  **로그아웃 API** — `POST /api/auth/logout`
-    - Redis 블랙리스트 또는 DB 토큰 무효화
+    - 토큰 해시를 남은 만료 시간 동안 Redis 블랙리스트에 저장
 - [✅]  **DB 스키마 구현** — 최종 확정된 ERD 기반 migration 실행
 - [✅]  **세션 시작 API** — `POST /api/sessions/start`
     - Request: `{}` (`user_id`는 JWT `sub`에서 추출)
@@ -112,13 +124,13 @@
     - report 자동 생성 트리거 (summary_json에 gaze/blink/head 분리 통계 포함)
     - Response: `200 + report_id`
 - [✅]  **집중도 로그 저장 API** — `POST /api/sessions/:id/log`
-    - Request: `{ gaze, blink, head, total }`
+    - Request: `{ gaze, blink, head, total, face_detected? }`; `total` 가중 합산값 검증, `face_detected` 생략 시 현재 `true`
     - Response: `200`
-- [✅]  **보안 검증 4조건 구현**
+- [✅]  **로그 입력·권한·전송 간격 검증 구현**
     - ① 점수 범위 검증 (0~100 float)
     - ② session_id 소유자 검증 (JWT sub 매칭)
-    - ③ 1분 미만 중복 전송 차단
-    - ④ 검증 실패 시 400/403 응답 + 로그 기록
+    - ③ Redis `SET NX EX 60`으로 동일 세션 60초 미만 전송 차단
+    - 검증 실패 시 400/403 응답; 구조화된 보안 실패 로그는 Phase 4 점검 대상
 - [✅]  **분당 1회 요청 제한 로직** 구현
 - [✅]  **세션 평균 집중도 계산 로직** 구현 (concentration_logs 집계 기반, sessions 컬럼 저장 없음)
 - [✅]  **개별 세션 상세 조회** — `GET /api/sessions/:id`
@@ -145,7 +157,7 @@
     - requester_user_id ≠ receiver_user_id 검증 (자기 자신 요청 차단)
     - 이미 연결된 관계 중복 요청 차단
 - [✅]  **친구 요청 수락/거절 API** — `PATCH /api/connections/:id`
-    - status: ACCEPTED → user_connections에 양방향 레코드 자동 생성
+    - status: ACCEPTED → 두 사용자 ID를 정렬한 단일 `user_connections` 레코드 생성
     - status: REJECTED → user_connection_requests 상태 업데이트만
     - PENDING 상태를 원자적으로 선점해 동시 응답 중 하나만 처리
 - [✅]  **친구 목록 조회 API** — `GET /api/connections`
@@ -222,6 +234,8 @@
 > 단위 테스트 작성, 보안 점검, Roll-up 스케줄러 구현, 통합 테스트 진행
 >
 > 진행 재분류 (2026-08-19): 검증용 React 프런트엔드에서 목업 데이터 기반 MVP 흐름을 수동 확인하고, 동일 흐름의 실제 API 통합 시나리오 및 데이터 무결성 검사를 통과함. 프로덕션 프런트엔드 E2E는 프런트 구현 후 별도 확인 필요.
+>
+> 현재 재검증 (2026-09-22): `npm test -- --runInBand` 5 suite·19 test 통과. 점수 유틸, 세션 시작 경쟁, 주간·월간 리포트의 완료 세션 필터, 친구 요청 원자적 상태 전이, 만료 초대 재발급을 다루는 mock 기반 단위 테스트다. 아래 Phase 4의 모든 시나리오가 완료됐다는 의미는 아니다. `python3 -m pytest ai/tests -q`는 현재 Python에 pytest가 없어 실행되지 않았다.
 
 - [ ]  **인증 모듈 단위 테스트**
     - 정상 로그인, 잘못된 토큰, 만료 토큰 케이스
@@ -253,11 +267,9 @@
     - 세션 공유 프라이버시 설정 우회 시나리오 점검
 - [ ]  **쿼리 성능 분석**
     - `EXPLAIN ANALYZE`로 N+1 쿼리 확인
-    - concentration_logs: `(session_id, logged_at)` 복합 인덱스 추가
-    - sessions: `(user_id, started_at)` 인덱스 추가
-    - session_shares: `(session_id, share_scope, group_id)` 부분 UNIQUE 인덱스 추가
-    - session_reactions: `(session_share_id, user_id, reaction_type)` UNIQUE 인덱스 확인
-    - group_members: `(group_id, user_id)` UNIQUE 인덱스 확인
+    - concentration_logs `(session_id, logged_at)`, sessions `(user_id, started_at)` 기존 인덱스의 실제 실행 계획 확인
+    - session_shares `(session_id, share_scope, group_id)` 및 group_id가 NULL인 경우의 부분 UNIQUE 인덱스 적용 확인
+    - session_reactions `(session_share_id, user_id, reaction_type)`, group_members `(group_id, user_id)` 기존 UNIQUE 인덱스 확인
     - v_rankings Materialized View 전환 검토 — 랭킹 조회 빈도 높을 경우 적용
 - [ ]  **View 성능 검증** — v_session_share_reaction_counts, v_user_session_summaries, v_group_member_stats, v_rankings 각 실행 계획 확인
 - [ ]  **프론트엔드 통합 테스트 지원**
@@ -364,11 +376,11 @@ S = (Gaze × 0.4) + (Blink × 0.3) + (Head × 0.3)
 
 ## 📎 참고: 조회용 View 목록
 
-파생 데이터(공감 개수, 랭킹, 기간별 평균 등)는 기본 테이블에 저장하지 않고 아래 View로 산출합니다. 랭킹 조회 빈도가 높을 경우 v_rankings는 Materialized View 전환을 검토합니다.
+파생 데이터(공감 개수, 랭킹, 기간별 평균 등)는 기본 테이블에 저장하지 않고 아래 View 또는 API 조회 시 계산합니다. 랭킹 조회 빈도가 높을 경우 v_rankings는 Materialized View 전환을 검토합니다.
 
 | View 이름 | 집계 기준 | 사용 목적 |
 | --- | --- | --- |
 | v_session_share_reaction_counts | session_reactions를 session_share_id, reaction_type 기준 집계 | 피드에서 좋아요/응원/공감 개수 표시 |
 | v_user_session_summaries | sessions, concentration_logs, reports 조인 | 내 기록/공개 피드의 세션 카드 표시 |
-| v_group_member_stats | group_members와 세션 기록을 기간별 집계 | 관리자 그룹 대시보드 |
+| v_group_member_stats | group_members와 완료 세션의 누적 기록 집계 (현재 기간 필터 없음) | 관리자 그룹 대시보드 |
 | v_rankings | ranking_participation=true 사용자의 세션만 집계 | 전체/친구/그룹 랭킹 |

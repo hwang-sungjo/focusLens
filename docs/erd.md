@@ -2,6 +2,8 @@
 
 세션 기록 공유, 공감 기능, 온라인 네트워킹, 그룹 및 관리자 관리 시스템을 반영한 최종 ERD입니다.
 
+**구현 상태 (2026-09-22):** 아래 16개 기본 테이블은 `prisma/schema.prisma`와 마이그레이션에 정의돼 있다. `prisma/views.sql`과 마이그레이션에는 조회 View 4개가 있으며 Materialized View는 없다. `hourly_stats`, `daily_stats`, `weekly_stats`는 Roll-up 설계에만 있고 현재 스키마에는 없다. AI의 프레임 측정값은 아직 자동으로 `concentration_logs`에 전송되지 않는다.
+
 ---
 
 ## 1. ERD 점검 결과 요약
@@ -108,14 +110,13 @@ AI 경계 (2026-09-22): `ai/`의 Python·MediaPipe 프로그램은 현재 프레
 
 ## 6. 조회용 View 권장 사항
 
-파생 데이터는 기본 테이블에 저장하지 않고 View 또는 Materialized View로 산출합니다.
-랭킹 조회 빈도가 높을 경우 `v_rankings`는 Materialized View 전환을 검토합니다.
+현재 파생 데이터는 기본 테이블에 저장하지 않고 `prisma/views.sql`의 일반 View 4개 또는 컨트롤러 조회 시 계산한다. 랭킹 조회 빈도가 높을 경우 `v_rankings`의 Materialized View 전환은 Phase 4 검토 사항이다.
 
 | View 이름 | 집계 기준 | 사용 목적 |
 | --- | --- | --- |
 | v_session_share_reaction_counts | session_reactions를 session_share_id, reaction_type 기준으로 집계 | 피드에서 좋아요/응원/공감 개수 표시 |
 | v_user_session_summaries | sessions, concentration_logs, reports를 조인하여 세션 요약 생성 | 내 기록/공개 피드의 세션 카드 표시 |
-| v_group_member_stats | group_members와 세션 기록을 기간별로 집계 | 관리자 그룹 대시보드 |
+| v_group_member_stats | group_members와 완료 세션의 누적 기록을 집계 | 관리자 그룹 대시보드 (현재 기간 필터 없음) |
 | v_rankings | ranking_participation=true가 허용된 세션만 집계 | 전체/친구/그룹 랭킹 |
 
 > **설계 기준**: 기본 테이블에는 원본 사실 데이터만 저장하고, 좋아요 수/랭킹/기간별 평균 등 파생 값은 조회 시 계산하거나 별도 View로 관리한다.

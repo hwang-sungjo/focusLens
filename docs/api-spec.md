@@ -5,6 +5,8 @@
 > **인증 방식**: JWT Bearer Token (`Authorization: Bearer <access_token>`)  
 > **토큰 만료**: Access Token 1시간
 
+**구현 현황 (2026-09-22):** 아래 36개 API operation은 `backend/src/routes`에 구현돼 있으며 `docs/swagger.yaml`에 명세돼 있다. 인증은 Access Token만 지원하고 토큰 재발급 API는 없다. `GET /health`(DB·Redis 정상 시 200, 장애 시 503)와 `/api-docs`는 `/api` 밖의 백엔드 운영 경로다. AI 측 로그 API 클라이언트는 존재하지만 웹캠 측정 결과의 자동 전송은 아직 연결되지 않았다. 운영·통합 검증 상태는 `docs/backend-plan.md` Phase 4·5를 따른다.
+
 ---
 
 ## 1. 공통 규약
@@ -553,6 +555,8 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 ### GET /api/reports/weekly
 
 최근 7일 일별 평균 집중도 요약.
+`daily_summaries`는 데이터가 없는 날짜를 포함해 7개 날짜를 반환하며 해당 날짜 평균은 `null`이다. 기간 전체에 로그가 없으면 `weekly_avg_focus_score`도 `null`이다.
+아래 응답 예시는 `daily_summaries` 배열의 한 날짜만 보여준다.
 
 | 항목 | 내용 |
 | --- | --- |
@@ -607,6 +611,8 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 ### GET /api/reports/monthly
 
 기준일을 포함한 최근 30일의 일별 집중도 요약. `COMPLETED` 세션만 집계한다.
+`daily_summaries`는 데이터가 없는 날짜를 포함해 30개 날짜를 반환하며 해당 날짜 평균은 `null`이다. 기간 전체에 로그가 없으면 `monthly_avg_focus_score`도 `null`이다.
+아래 응답 예시는 `daily_summaries` 배열의 한 날짜만 보여준다.
 
 | 항목 | 내용 |
 | --- | --- |
