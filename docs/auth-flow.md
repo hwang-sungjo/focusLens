@@ -83,7 +83,7 @@ sequenceDiagram
     R-->>M: not blocked
     M->>P: req.user = { sub, email, role }
     P->>D: 비즈니스 로직 (user_id = sub)
-    P-->>C: 200 { success, data, error: null }
+    P-->>C: 200 { success: true, data, error: "" }
   end
 ```
 
@@ -148,7 +148,7 @@ sequenceDiagram
 1. Authorization 헤더 존재 여부
 2. "Bearer " prefix 및 토큰 문자열 추출
 3. jwt.verify(token, JWT_SECRET) — 서명·exp 검증
-4. Redis EXISTS blacklist:{token_hash} — 블랙리스트 확인
+4. Redis GET blacklist:{token_hash} — 블랙리스트 확인
 5. req.user = { sub, email, role } 설정 → next()
 ```
 
@@ -157,16 +157,16 @@ sequenceDiagram
 ```json
 {
   "success": false,
-  "data": null,
-  "error": "인증 토큰이 필요합니다"
+  "data": {},
+  "error": "인증 토큰이 필요합니다."
 }
 ```
 
 ```json
 {
   "success": false,
-  "data": null,
-  "error": "만료되었거나 유효하지 않은 토큰입니다"
+  "data": {},
+  "error": "토큰이 만료되었습니다."
 }
 ```
 
@@ -189,6 +189,8 @@ JWT sub → sessions.id = :id 조회 → sessions.user_id === sub ?
   YES → 로그 저장
   NO  → 403 "해당 세션에 대한 권한이 없습니다"
 ```
+
+현재 `ai/`에는 JWT를 전달받아 위 로그 API를 호출하는 Python 클라이언트 코드가 있다. 다만 웹캠 측정 루프와 연결되지 않았으며 자동 로그인·토큰 갱신도 구현되지 않았다. 실제 AI 측 자동 전송의 인증 흐름은 `docs/backend-plan.md` Phase 4 통합 검증 대상으로 남아 있다.
 
 ---
 
@@ -307,8 +309,8 @@ Access Token 만료(1시간) 또는 무효 토큰 시 서버는 **401**을 반�
 ```json
 {
   "success": false,
-  "data": null,
-  "error": "만료되었거나 유효하지 않은 토큰입니다"
+  "data": {},
+  "error": "토큰이 만료되었습니다."
 }
 ```
 
@@ -349,16 +351,16 @@ flowchart TD
 | 변수 | 설명 |
 | --- | --- |
 | `JWT_SECRET` | JWT 서명 비밀키 |
-| `JWT_EXPIRES_IN` | `3600` (초) — Access Token 만료 |
+| `JWT_EXPIRES_IN` | 예시 값 `1h` — Access Token 만료 (미설정 시 코드 기본값도 `1h`) |
 | `REDIS_URL` | 블랙리스트 저장용 Redis 연결 |
 
 ---
 
 ## 9. 구현 체크리스트
 
-- [ ] `src/middleware/auth.js` — JWT 검증 + Redis 블랙리스트 확인
-- [ ] `src/middleware/groupAuth.js` — JWT `sub` → `group_members` 조회 및 `group_role` 검증
-- [ ] `src/middleware/sessionOwner.js` — `sessions.user_id` = JWT `sub` 검증
-- [ ] `POST /api/auth/logout` — Redis `SET blacklist:{hash} EX ttl`
-- [ ] 보호 라우트 전체에 auth 미들웨어 적용
-- [ ] `groups.created_by_user_id`로 권한 판단하는 코드 **금지**
+- [✅] `backend/src/middleware/auth.js` — JWT 서명·만료 검증 + Redis 블랙리스트 확인
+- [✅] `backend/src/controllers/groupsController.js` — JWT `sub`로 `group_members` 조회 및 `group_role` 검증 (별도 `groupAuth.js` 미들웨어 없음)
+- [✅] 세션·리포트·공유 컨트롤러 — `sessions.user_id`와 JWT `sub` 일치 검증 (별도 `sessionOwner.js` 미들웨어 없음)
+- [✅] `POST /api/auth/logout` — Redis `SET blacklist:{hash} EX ttl`
+- [✅] 보호 라우트 전체에 auth 미들웨어 적용
+- [ ] Phase 4에서 그룹 권한·세션 소유자 우회 시나리오 통합 검증

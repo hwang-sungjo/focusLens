@@ -4,6 +4,23 @@
 > **응답 형식**: `{ success, data, error }`  
 > **권한 원칙**: 그룹 API는 `group_members.group_role` 기준, 세션 API는 JWT `sub` = `sessions.user_id`
 
+### 구현 범위 요약 (2026-09-22)
+
+아래는 `backend/src/routes`와 `docs/swagger.yaml`의 현행 36개 operation을 도메인별로 묶은 것이다. 세부 요청·응답은 `docs/api-spec.md`를 따른다.
+
+| 도메인 | 구현된 API 범위 | operation 수 |
+| --- | --- | ---: |
+| 인증 | 회원가입·로그인·로그아웃. 1시간 Access Token과 Redis 블랙리스트; Refresh Token API 없음 | 3 |
+| 세션 | 시작·로그 저장·종료·목록·상세 | 5 |
+| 리포트 | 세션별·주간·월간 조회 | 3 |
+| 사용자 | 공개 프로필 조회·내 프로필 수정·프라이버시 조회/수정 | 4 |
+| 친구 | 요청·수락/거절/취소·친구/대기 요청 조회 | 3 |
+| 공유 | 세션 공유·피드·공감 추가/취소 | 4 |
+| 랭킹 | 전체·친구·그룹 범위의 일간/주간 집중도·학습시간 | 1 |
+| 그룹 | 그룹 생성/목록/상세, 초대·참여, 멤버 역할/내보내기, 대시보드, 목표 생성/목록/배정, 피드백 작성/조회 | 13 |
+
+이 표는 라우트 구현 범위다. AI의 1분 점수 자동 전송, 제품 프런트엔드 E2E, Roll-up과 배포 검증은 `docs/backend-plan.md` Phase 4·5에 남아 있다.
+
 ---
 
 ## 1. 인증 (Auth)
@@ -54,7 +71,7 @@
 | --- | --- |
 | **기능명** | 학습 세션 시작 |
 | **행위 주체** | 인증된 사용자 |
-| **사전 조건** | JWT 유효. 동일 사용자의 `IN_PROGRESS` 세션이 없음 (정책에 따라 1개 제한) |
+| **사전 조건** | JWT 유효. 동일 사용자의 `IN_PROGRESS` 세션이 없음 (DB 부분 UNIQUE 인덱스로 1개 제한) |
 | **처리 흐름** | 1. `POST /api/sessions/start` — JWT `sub`에서 `user_id` 추출<br>2. `sessions` INSERT (`user_id`, `started_at=NOW()`, `status=IN_PROGRESS`)<br>3. `201` + `session_id`, `started_at`, `status` 반환 |
 | **예외 처리** | JWT 없음/만료 → **401**<br>이미 진행 중인 세션 존재 → **409**<br>DB 오류 → **500** |
 
@@ -67,8 +84,8 @@
 | **기능명** | 분 단위 집중도 로그 저장 |
 | **행위 주체** | 세션 소유자 (인증된 사용자) |
 | **사전 조건** | JWT 유효. `sessions.id = :id` 존재. `sessions.user_id = JWT sub`. `sessions.status = IN_PROGRESS` |
-| **처리 흐름** | 1. `POST /api/sessions/:id/log` — `{ gaze, blink, head, total }` 수신<br>2. 미들웨어: 각 점수 0~100 float 검증 (`focusScore.js`)<br>3. 미들웨어: `sessions.user_id = sub` 소유자 검증<br>4. `logged_at = date_trunc('minute', NOW())` 정규화<br>5. 동일 `(session_id, logged_at)` 존재 여부 확인 (UNIQUE 사전 검사)<br>6. `focus_score = total`, `attention_state` = S 기준 판별 (≥70 FOCUSED, 40~69 NORMAL, <40 DISTRACTED)<br>7. `concentration_logs` INSERT<br>8. `200` + `log_id`, `logged_at`, `focus_score`, `attention_state` 반환 |
-| **예외 처리** | 점수 범위 위반 → **400**<br>동일 분 중복 → **400** `"1분 미만 중복 로그 전송입니다"`<br>JWT 없음 → **401**<br>소유자 불일치 → **403**<br>세션 없음 → **404**<br>종료된 세션 → **409**<br>UNIQUE DB 충돌 (동시 요청) → **400** |
+| **처리 흐름** | 1. `POST /api/sessions/:id/log` — `{ gaze, blink, head, total, face_detected? }` 수신<br>2. 라우트에서 각 점수의 숫자·유한성·0~100 범위와 선택적 `face_detected`의 boolean 타입 검증<br>3. 컨트롤러에서 `sessions.user_id = JWT sub`, 진행 중 상태 검증<br>4. 서버에서 `total`이 0.4/0.3/0.3 가중 합산값과 일치하는지 검증<br>5. Redis `SET NX`로 동일 세션의 60초 미만 재전송 차단<br>6. 서버 수신 시각을 `logged_at`으로 저장하고, 계산한 `focus_score`로 `attention_state` 판별 (≥70 FOCUSED, 40~69 NORMAL, <40 DISTRACTED)<br>7. `concentration_logs` INSERT<br>8. `200` + `log_id`, `logged_at`, `focus_score`, `attention_state`, `face_detected` 반환. `face_detected` 미전송 시 현재 기본값은 `true` |
+| **예외 처리** | 점수·`face_detected` 형식 오류 또는 `total` 불일치 → **400**<br>60초 미만 중복 전송 → **400** `"1분 미만 중복 로그 전송입니다"`<br>JWT 없음 → **401**<br>소유자 불일치 → **403**<br>세션 없음 → **404**<br>종료된 세션 → **409** |
 
 ---
 
@@ -81,6 +98,14 @@
 | **사전 조건** | JWT 유효. `sessions.status = IN_PROGRESS`. `sessions.user_id = JWT sub` |
 | **처리 흐름** | 1. `POST /api/sessions/:id/end` 요청<br>2. 소유자 검증 후 `sessions` UPDATE (`ended_at=NOW()`, `status=COMPLETED`)<br>3. `concentration_logs` 집계 → gaze/blink/head/focus 평균, duration(`ended_at-started_at`), 상태별 분 수<br>4. `reports` INSERT (`session_id` UNIQUE, `summary_json`에 통계 저장)<br>5. `200` + `session_id`, `report_id`, `summary` 반환 |
 | **예외 처리** | JWT 없음 → **401**<br>소유자 불일치 → **403**<br>세션 없음 → **404**<br>이미 종료 → **409**<br>리포트 생성 실패 → **500** (세션 상태 롤백) |
+
+---
+
+### 2.4 AI 측정 클라이언트 구현 현황 (2026-09-22)
+
+`ai/`는 Python 3.11·OpenCV·MediaPipe Face Landmarker를 사용하는 로컬 실행 프로그램이다. 현재 약 10 FPS로 웹캠 프레임을 추론하며, 얼굴 검출 여부, 양쪽 홍채의 눈 내부 상대 위치(`gaze_x`, `gaze_y`), 양쪽 blink blendshape와 단일 프레임 눈 감김, 변환 행렬의 `yaw/pitch/roll`을 추출한다. 실시간 디버그 화면과 프레임별 JSON 출력을 제공한다. 가중 합산 `total` 함수와 JWT를 사용하는 로그 API 클라이언트도 각각 구현돼 있다.
+
+사용자별 gaze/head 보정, blink 이벤트·장시간 눈 감김 판정, 1분 버퍼와 `gaze/blink/head` 점수 집계, 얼굴 검출 비율 기반 분 단위 `face_detected`, 실패 재전송 큐는 아직 구현되지 않았다. 웹캠 파이프라인은 API 클라이언트를 호출하지 않으므로 실제 세션 로그의 자동 전송도 아직 동작하지 않는다. 진행 상태는 `docs/backend-plan.md`의 AI 현황표와 이 절을 기준으로 하고, `ai/README.md`와 `ai/FocusLens_focus_log_implementation_plan.md`는 구현·후속 설계 자료로 참조한다.
 
 ---
 
@@ -106,7 +131,7 @@
 | **행위 주체** | 인증된 사용자 (본인 데이터) |
 | **사전 조건** | JWT 유효 |
 | **처리 흐름** | 1. `GET /api/reports/weekly` — 선택 `end_date` (기본 오늘)<br>2. 기준일 포함 최근 7일 범위 산출<br>3. JWT `sub` 사용자의 `COMPLETED` 세션 + `concentration_logs` 집계<br>4. 일별 `session_count`, `total_study_seconds`, `avg_focus_score` 계산<br>5. 주간 평균 집중도·총 학습 시간 합산<br>6. `200` + `period`, `daily_summaries`, `weekly_avg_focus_score`, `weekly_total_study_seconds` |
-| **예외 처리** | JWT 없음 → **401**<br>`end_date` 형식 오류 → **400**<br>해당 기간 세션 없음 → **200** (빈 `daily_summaries`, 0 값) |
+| **예외 처리** | JWT 없음 → **401**<br>`end_date` 형식 오류 → **400**<br>해당 기간 세션 없음 → **200** (7개 날짜의 `daily_summaries`, 각 `session_count=0`, `total_study_seconds=0`, `avg_focus_score=null`; `weekly_avg_focus_score=null`) |
 
 ---
 
@@ -130,7 +155,7 @@
 | --- | --- |
 | **기능명** | 친구 요청 수락·거절·취소 |
 | **행위 주체** | 수신자(수락/거절) 또는 요청자(취소) |
-| **사전 조건** | JWT 유휴. `user_connection_requests.status = PENDING`. 처리 권한: 수락/거절 → `receiver_user_id = sub`, 취소 → `requester_user_id = sub` |
+| **사전 조건** | JWT 유효. `user_connection_requests.status = PENDING`. 처리 권한: 수락/거절 → `receiver_user_id = sub`, 취소 → `requester_user_id = sub` |
 | **처리 흐름** | 1. `PATCH /api/connections/:id` — `{ status }` 수신<br>2. 요청 레코드 조회 및 권한·상태 검증<br>3. `ACCEPTED`: `user_connection_requests` UPDATE + `user_connections` INSERT (`user_a_id`, `user_b_id` 정렬)<br>4. `REJECTED` / `CANCELLED`: 요청 상태 UPDATE만<br>5. `200` + `request_id`, `status`, `connection_id`(수락 시) |
 | **예외 처리** | 잘못된 status → **400**<br>JWT 없음 → **401**<br>권한 없음 → **403**<br>요청 없음 → **404**<br>이미 처리됨 → **409** |
 
@@ -235,7 +260,7 @@
 | **기능명** | 그룹 학습 목표 생성 |
 | **행위 주체** | 그룹 OWNER 또는 MANAGER |
 | **사전 조건** | JWT 유효. `group_members.group_role IN (OWNER, MANAGER)`, `status=ACTIVE` |
-| **처리 흐름** | 1. `POST /api/groups/:id/goals` — `title`, `description`, `target_study_minutes`, `target_focus_score`, `start_date`, `end_date`<br>2. `groupAuth` 미들웨어로 역할 검증<br>3. `target_focus_score` 0~100 검증 (있을 경우)<br>4. `group_goals` INSERT (`created_by_member_id` = 요청자 `group_members.id`)<br>5. `201` + `goal_id`, 목표 상세 |
+| **처리 흐름** | 1. `POST /api/groups/:id/goals` — `title`, `description`, `target_study_minutes`, `target_focus_score`, `start_date`, `end_date`<br>2. 라우트 입력 검증 후 그룹 컨트롤러에서 `group_members.group_role` 확인<br>3. `target_focus_score` 0~100 검증 (있을 경우)<br>4. `group_goals` INSERT (`created_by_member_id` = 요청자 `group_members.id`)<br>5. `201` + `goal_id`, 목표 상세 |
 | **예외 처리** | 필수 필드 누락 → **400**<br>target_focus_score 범위 위반 → **400**<br>end_date < start_date → **400**<br>JWT 없음 → **401**<br>MEMBER 또는 비구성원 → **403**<br>그룹 없음 → **404** |
 
 ---
