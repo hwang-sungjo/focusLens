@@ -1,42 +1,73 @@
 // src/controllers/sessionsController.js
-// ERD 원칙: sessions에 avg_focus_score/duration_seconds 저장 금지 — 조회 시 concentration_logs에서 계산
+// ERD 원칙: sessions에 파생 평균/기간 저장 금지 — 원본과 Roll-up tier에서 조회 시 계산
 const prisma = require('../models/prismaClient');
-const { acquireLogRateLimit, releaseLogRateLimit } = require('../services/redis');
 const { calcFocusScore, getAttentionState } = require('../utils/focusScore');
+const {
+  calculateDurationSeconds,
+  buildSessionSummary,
+} = require('../utils/sessionMetrics');
+const { getSessionMetricMap, getSessionTimeline } = require('../services/sessionStats');
+const { getPagination } = require('../utils/pagination');
 const { createError } = require('../middleware/errorHandler');
 
 const round = (value) => Math.round(value * 100) / 100;
+const MINUTE_MS = 60_000;
 
-const calculateDurationSeconds = (startedAt, endedAt) => {
-  if (!endedAt) return null;
-  return Math.max(0, Math.floor((endedAt.getTime() - startedAt.getTime()) / 1000));
+const runSerializableTransaction = async (operation, maxAttempts = 3) => {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await prisma.$transaction(operation, { isolationLevel: 'Serializable' });
+    } catch (err) {
+      if (err.code !== 'P2034' || attempt === maxAttempts) throw err;
+    }
+  }
+  throw new Error('트랜잭션을 완료하지 못했습니다.');
 };
 
-const calculateAverage = (logs, field = 'focus_score') => {
-  if (!logs.length) return null;
-  return round(logs.reduce((sum, log) => sum + log[field], 0) / logs.length);
+const calculateMinuteIndex = (startedAt, receivedAt) => {
+  const elapsedMs = receivedAt.getTime() - startedAt.getTime();
+  if (elapsedMs < MINUTE_MS) {
+    throw createError('첫 1분 측정 구간이 아직 완료되지 않았습니다.', 400);
+  }
+  return Math.floor(elapsedMs / MINUTE_MS);
 };
 
-const buildSummaryJson = (logs, startedAt, endedAt) => ({
-  avg_focus_score: calculateAverage(logs),
-  duration_seconds: calculateDurationSeconds(startedAt, endedAt),
-  gaze_avg: calculateAverage(logs, 'gaze_score'),
-  blink_avg: calculateAverage(logs, 'blink_score'),
-  head_avg: calculateAverage(logs, 'head_score'),
-  focused_minutes: logs.filter((log) => log.attention_state === 'FOCUSED').length,
-  normal_minutes: logs.filter((log) => log.attention_state === 'NORMAL').length,
-  distracted_minutes: logs.filter((log) => log.attention_state === 'DISTRACTED').length,
-  total_logs: logs.length,
-});
-
-const serializeSession = (session) => ({
+const serializeSession = (session, metric) => ({
   session_id: session.id,
   started_at: session.started_at,
   ended_at: session.ended_at,
   status: session.status,
-  avg_focus_score: calculateAverage(session.concentration_logs),
+  avg_focus_score: metric?.avg_focus_score ?? null,
   duration_seconds: calculateDurationSeconds(session.started_at, session.ended_at),
 });
+
+const logSelect = {
+  id: true,
+  minute_index: true,
+  logged_at: true,
+  gaze_score: true,
+  blink_score: true,
+  head_score: true,
+  focus_score: true,
+  attention_state: true,
+  face_detected: true,
+};
+
+const serializeLogResponse = (log) => ({
+  log_id: log.id,
+  minute_index: log.minute_index,
+  logged_at: log.logged_at,
+  focus_score: log.focus_score,
+  attention_state: log.attention_state,
+  face_detected: log.face_detected,
+});
+
+const hasSameLogContent = (log, values) =>
+  log.gaze_score === values.gaze
+  && log.blink_score === values.blink
+  && log.head_score === values.head
+  && log.focus_score === values.total
+  && log.face_detected === values.faceDetected;
 
 /** POST /api/sessions/start */
 const startSession = async (req, res, next) => {
@@ -81,54 +112,106 @@ const logConcentration = async (req, res, next) => {
   try {
     const userId = req.user.sub;
     const { id: sessionId } = req.params;
-    const { gaze, blink, head, total, face_detected = true } = req.body;
+    const {
+      gaze: gazeValue,
+      blink: blinkValue,
+      head: headValue,
+      total: totalValue,
+      face_detected: faceDetected,
+    } = req.body;
 
-    // ② session_id 소유자 = JWT sub 매칭 검증
-    const session = await prisma.sessions.findUnique({ where: { id: sessionId } });
-    if (!session) return next(createError('세션을 찾을 수 없습니다.', 404));
-    if (session.user_id !== userId) return next(createError('세션에 대한 권한이 없습니다.', 403));
-    if (session.status !== 'IN_PROGRESS') return next(createError('종료된 세션에는 로그를 추가할 수 없습니다.', 409));
+    if (typeof faceDetected !== 'boolean') {
+      return next(createError('face_detected는 필수 boolean이어야 합니다.', 400));
+    }
+    if (!faceDetected && [gazeValue, blinkValue, headValue, totalValue].some((value) => value !== 0)) {
+      return next(createError('face_detected가 false이면 모든 점수는 0이어야 합니다.', 400));
+    }
 
+    const gaze = round(gazeValue);
+    const blink = round(blinkValue);
+    const head = round(headValue);
+    const requestedTotal = round(totalValue);
     const calculatedTotal = calcFocusScore(gaze, blink, head);
-    if (Math.abs(calculatedTotal - total) > 0.01) {
+    if (Math.abs(calculatedTotal - requestedTotal) > 0.01) {
       return next(createError(`total은 가중 합산값 ${calculatedTotal}과 일치해야 합니다.`, 400));
     }
 
-    // Redis SET NX로 동시 요청도 원자적으로 차단한다.
-    const acquired = await acquireLogRateLimit(sessionId, 60);
-    if (!acquired) return next(createError('1분 미만 중복 로그 전송입니다.', 400));
-
+    const receivedAt = new Date();
     const attention_state = getAttentionState(calculatedTotal);
+    const normalizedValues = {
+      gaze,
+      blink,
+      head,
+      total: calculatedTotal,
+      faceDetected,
+    };
 
+    let minuteIndex;
     let log;
     try {
-      log = await prisma.concentration_logs.create({
-        data: {
-          session_id: sessionId,
-          logged_at: new Date(),
-          gaze_score: gaze,
-          blink_score: blink,
-          head_score: head,
-          focus_score: calculatedTotal,
-          attention_state,
-          face_detected,
-        },
-        select: { id: true, logged_at: true, focus_score: true, attention_state: true, face_detected: true },
+      log = await runSerializableTransaction(async (tx) => {
+        const session = await tx.sessions.findUnique({ where: { id: sessionId } });
+        if (!session) throw createError('세션을 찾을 수 없습니다.', 404);
+        if (session.user_id !== userId) throw createError('세션에 대한 권한이 없습니다.', 403);
+        if (session.status !== 'IN_PROGRESS') {
+          throw createError('종료된 세션에는 로그를 추가할 수 없습니다.', 409);
+        }
+
+        minuteIndex = calculateMinuteIndex(session.started_at, receivedAt);
+        const uniqueWhere = {
+          session_id_minute_index: { session_id: sessionId, minute_index: minuteIndex },
+        };
+        const existingLog = await tx.concentration_logs.findUnique({
+          where: uniqueWhere,
+          select: logSelect,
+        });
+        if (existingLog) {
+          if (!hasSameLogContent(existingLog, normalizedValues)) {
+            throw createError('같은 분 구간에 다른 로그가 이미 존재합니다.', 409);
+          }
+          return existingLog;
+        }
+
+        return tx.concentration_logs.create({
+          data: {
+            session_id: sessionId,
+            minute_index: minuteIndex,
+            logged_at: receivedAt,
+            gaze_score: gaze,
+            blink_score: blink,
+            head_score: head,
+            focus_score: calculatedTotal,
+            attention_state,
+            face_detected: faceDetected,
+          },
+          select: logSelect,
+        });
       });
     } catch (err) {
-      await releaseLogRateLimit(sessionId).catch(() => {});
-      throw err;
+      if (err.code !== 'P2002' || minuteIndex === undefined) throw err;
+
+      const session = await prisma.sessions.findUnique({ where: { id: sessionId } });
+      if (!session) return next(createError('세션을 찾을 수 없습니다.', 404));
+      if (session.user_id !== userId) return next(createError('세션에 대한 권한이 없습니다.', 403));
+      if (session.status !== 'IN_PROGRESS') {
+        return next(createError('종료된 세션에는 로그를 추가할 수 없습니다.', 409));
+      }
+
+      const concurrentLog = await prisma.concentration_logs.findUnique({
+        where: {
+          session_id_minute_index: { session_id: sessionId, minute_index: minuteIndex },
+        },
+        select: logSelect,
+      });
+      if (!concurrentLog || !hasSameLogContent(concurrentLog, normalizedValues)) {
+        return next(createError('같은 분 구간에 다른 로그가 이미 존재합니다.', 409));
+      }
+      log = concurrentLog;
     }
 
     return res.status(200).json({
       success: true,
-      data: {
-        log_id: log.id,
-        logged_at: log.logged_at,
-        focus_score: log.focus_score,
-        attention_state: log.attention_state,
-        face_detected: log.face_detected,
-      },
+      data: serializeLogResponse(log),
       error: '',
     });
   } catch (err) {
@@ -142,32 +225,36 @@ const endSession = async (req, res, next) => {
     const userId = req.user.sub;
     const { id: sessionId } = req.params;
 
-    const session = await prisma.sessions.findUnique({ where: { id: sessionId } });
-    if (!session) return next(createError('세션을 찾을 수 없습니다.', 404));
-    if (session.user_id !== userId) return next(createError('세션에 대한 권한이 없습니다.', 403));
-    if (session.status !== 'IN_PROGRESS') return next(createError('이미 종료된 세션입니다.', 409));
+    const { updatedSession, report, summaryJson } = await runSerializableTransaction(async (tx) => {
+      const session = await tx.sessions.findUnique({ where: { id: sessionId } });
+      if (!session) throw createError('세션을 찾을 수 없습니다.', 404);
+      if (session.user_id !== userId) throw createError('세션에 대한 권한이 없습니다.', 403);
+      if (session.status !== 'IN_PROGRESS') throw createError('이미 종료된 세션입니다.', 409);
 
-    const logs = await prisma.concentration_logs.findMany({
-      where: { session_id: sessionId },
-      select: {
-        gaze_score: true, blink_score: true, head_score: true, focus_score: true, attention_state: true,
-      },
-    });
+      const logs = await tx.concentration_logs.findMany({
+        where: { session_id: sessionId },
+        select: {
+          gaze_score: true,
+          blink_score: true,
+          head_score: true,
+          focus_score: true,
+          attention_state: true,
+        },
+      });
+      const endedAt = new Date();
+      const summary = buildSessionSummary(logs, session.started_at, endedAt);
 
-    const endedAt = new Date();
-    const summaryJson = buildSummaryJson(logs, session.started_at, endedAt);
-
-    const [updatedSession, report] = await prisma.$transaction([
-      prisma.sessions.update({
+      const completedSession = await tx.sessions.update({
         where: { id: sessionId },
         data: { status: 'COMPLETED', ended_at: endedAt },
         select: { id: true, ended_at: true, status: true },
-      }),
-      prisma.reports.create({
-        data: { session_id: sessionId, summary_json: summaryJson },
+      });
+      const createdReport = await tx.reports.create({
+        data: { session_id: sessionId, summary_json: summary },
         select: { id: true },
-      }),
-    ]);
+      });
+      return { updatedSession: completedSession, report: createdReport, summaryJson: summary };
+    });
 
     return res.status(200).json({
       success: true,
@@ -189,24 +276,27 @@ const endSession = async (req, res, next) => {
 const getSessions = async (req, res, next) => {
   try {
     const userId = req.user.sub;
-    const page = Number.parseInt(req.query.page || '1', 10);
-    const limit = Number.parseInt(req.query.limit || '20', 10);
+    const { page, limit, skip } = getPagination(req.query);
     const where = { user_id: userId, ...(req.query.status && { status: req.query.status }) };
 
     const [rows, total] = await prisma.$transaction([
       prisma.sessions.findMany({
         where,
-        orderBy: { started_at: 'desc' },
-        skip: (page - 1) * limit,
+        orderBy: [{ started_at: 'desc' }, { id: 'desc' }],
+        skip,
         take: limit,
-        include: { concentration_logs: { select: { focus_score: true } } },
       }),
       prisma.sessions.count({ where }),
     ]);
 
+    const metricMap = await getSessionMetricMap(rows.map((session) => session.id));
+
     return res.status(200).json({
       success: true,
-      data: { sessions: rows.map(serializeSession), pagination: { page, limit, total } },
+      data: {
+        sessions: rows.map((session) => serializeSession(session, metricMap.get(session.id))),
+        pagination: { page, limit, total },
+      },
       error: '',
     });
   } catch (err) {
@@ -220,32 +310,21 @@ const getSession = async (req, res, next) => {
     const userId = req.user.sub;
     const { id: sessionId } = req.params;
 
-    const session = await prisma.sessions.findUnique({
-      where: { id: sessionId },
-      include: {
-        concentration_logs: {
-          orderBy: { logged_at: 'asc' },
-          select: { logged_at: true, gaze_score: true, blink_score: true, head_score: true, focus_score: true, attention_state: true, face_detected: true },
-        },
-      },
-    });
+    const session = await prisma.sessions.findUnique({ where: { id: sessionId } });
 
     if (!session) return next(createError('세션을 찾을 수 없습니다.', 404));
     if (session.user_id !== userId) return next(createError('세션에 대한 권한이 없습니다.', 403));
 
+    const [metricMap, timeline] = await Promise.all([
+      getSessionMetricMap([sessionId]),
+      getSessionTimeline(sessionId),
+    ]);
+
     return res.status(200).json({
       success: true,
       data: {
-        ...serializeSession(session),
-        timeline: session.concentration_logs.map((log) => ({
-          logged_at: log.logged_at,
-          gaze_score: log.gaze_score,
-          blink_score: log.blink_score,
-          head_score: log.head_score,
-          focus_score: log.focus_score,
-          attention_state: log.attention_state,
-          face_detected: log.face_detected,
-        })),
+        ...serializeSession(session, metricMap.get(sessionId)),
+        timeline,
       },
       error: '',
     });

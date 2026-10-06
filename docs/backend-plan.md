@@ -1,386 +1,279 @@
-# 백엔드 세부 일정 및 구현 계획
+# FocusLens 백엔드 전용 구현 계획
 
-## 📌 핵심 마일스톤 요약
+> 기준일: 2026-10-06
+>
+> 기준 커밋: `1ddd170`
+> 이 문서는 이후 백엔드 작업의 진행 기준이다. Phase 1부터 Phase 5까지 순서대로 진행하고, 완료 조건을 충족한 항목만 `[✅]`로 변경한다.
 
-| 마일스톤 | 목표 | 완료 기준 | 완료 일자 |
+## 0. 작업 범위
+
+### 수정 대상
+
+- `backend/`: Express API, 인증, 컨트롤러, 서비스, 운영 설정
+- `prisma/`: 스키마, 마이그레이션, View, 시드
+- `src/**/*.test.js`: 현재 Jest 설정이 사용하는 백엔드 테스트
+- `docker-compose.yml`, 백엔드 배포·CI 설정
+- `docs/`: 백엔드 API, ERD, 보안, 운영 문서
+
+### 수정하지 않는 대상
+
+- `ai/`: Python, MediaPipe, 카메라, 점수 계산, API 클라이언트를 포함한 전체 디렉터리
+- `frontend/`: 제품 프런트엔드 구현
+
+AI와 프런트엔드는 외부 클라이언트로 취급한다. Phase 4에서는 현재 요청 형식을 고정한 fixture와 HTTP 요청으로 백엔드 계약을 검증한다. 실제 카메라, AI 재시도, 브라우저 화면 E2E는 백엔드 완료 조건에 포함하지 않는다.
+
+### 백엔드가 수신하는 현재 로그 형식
+
+```json
+{
+  "gaze": 85.5,
+  "blink": 72.0,
+  "head": 90.0,
+  "total": 82.8,
+  "face_detected": true
+}
+```
+
+- 기존 `ai/` 클라이언트와 호환되도록 요청 필드를 추가하지 않는다.
+- `logged_at`과 분 구간 식별자는 서버의 세션 시작 시각과 수신 시각으로 결정한다.
+- 서버에 도착하기 전의 정확한 측정 시각과 지연 재전송 여부는 현재 요청만으로 복원할 수 없다. 이 제약을 API 문서에 명시한다.
+- 향후 클라이언트 계약을 변경할 때만 `minute_index`, 원래 측정 시각, 클라이언트 요청 ID 도입을 별도 버전으로 검토한다.
+
+---
+
+## 1. 마일스톤
+
+| Phase | 목표 | 완료 기준 | 상태 |
 | --- | --- | --- | --- |
-| M1 | 기획 완료 | ERD 확정, API 명세 팀 합의, 개발 규칙 정의 | 7/5 |
-| M2 | MVP 기능 완료 | 인증 + 세션 + 로그 저장 + 리포트 API 전체 동작 | 8/21 |
-| M3 | 내부 통합 검증 | 단위 테스트 통과, 보안 점검 완료, 프론트 연동 확인 | 10/4 |
-| M4 | 프로덕션 배포 완료 | AWS 라이브, CI/CD 작동, 모니터링 정상 | 10/25 |
+| Phase 1 | 백엔드 설계 확정 | ERD, API, 인증, 권한, Roll-up 정책 문서화 | ✅ 완료 |
+| Phase 2 | 실행 환경 구축 | Express, Prisma, PostgreSQL, Redis, Docker, Health check | ✅ 완료 |
+| Phase 3 | MVP API 구현 | 인증, 세션, 리포트, 소셜, 랭킹, 그룹 API 구현 | ✅ 완료 |
+| Phase 4 | 백엔드 검증·고도화 | 로그 수신 안정화, 보안 테스트, Roll-up, 성능 검증 | ✅ 완료 |
+| Phase 5 | 백엔드 배포·운영 | AWS, CI/CD, HTTPS, 모니터링, 복구 절차 검증 | 대기 |
 
-### 구현 상태 기준 (2026-09-22)
+### 현재 기준선
 
-| 영역 | 현재 코드로 확인한 범위 | 남은 범위 |
-| --- | --- | --- |
-| Backend API | Express 라우터 8개 도메인, OpenAPI 36개 operation: 인증, 세션·로그, 리포트, 프로필·프라이버시, 친구, 공유·공감, 랭킹, 그룹·목표·피드백 | Phase 4 보안·성능·실제 프런트/AI 연동 검증 |
-| 데이터 계층 | Prisma 모델 16개, 마이그레이션, 시드, 조회용 View 4개, PostgreSQL·Redis 연결 코드 | Roll-up 집계 테이블·스케줄러 및 원본 삭제 후 조회 정합성 |
-| AI | 로컬 Python·MediaPipe 프레임 특징 추출, 디버그 화면, 가중 `total` 계산 함수, 별도 로그 API 클라이언트 | 보정, blink 이벤트, 1분 집계, 웹캠→API 연결, 재시도 큐 |
-| 검증 | 이번 점검에서 Backend Jest 5 suite·19 test 통과. AI 테스트 파일 5개 확인 | AI pytest 실행 환경과 실제 카메라·DB·Redis E2E 재검증. 과거 문서의 E2E 기록은 이번 점검 결과와 구분 |
-| 운영 | Docker Compose·환경변수 예시·`/health`·Swagger UI 구성 | Phase 5 AWS·CI/CD·HTTPS·모니터링 |
-
-> 완료 표시는 기능 코드의 구현 상태를 뜻한다. Phase 4의 테스트·보안·운영 검증 완료를 뜻하지 않는다. 제품 프런트엔드 소스는 현재 저장소에 추적되지 않으며, 이전 검증용 UI 기록은 프로덕션 프런트엔드 연동 완료 근거가 아니다.
-
----
-
-## Phase 1. 상세 기획 및 설계
-
-> 📅 6/13 ~ 7/5 (3.5주)
-> ERD, API 명세, 인증 흐름 설계를 완료하고 팀 전체와 인터페이스를 합의하는 단계
-
-- [✅]  **ERD 초안 설계** — 코어 도메인: users, sessions, concentration_logs, reports / 소셜 도메인: user_profiles, user_privacy_settings, user_connection_requests, user_connections, session_shares, session_reactions / 그룹 도메인: groups, group_members, group_invitations, group_goals, group_goal_assignees, manager_feedbacks → `docs/erd.md`, `prisma/schema.prisma`
-- [✅]  **기능 명세 정리** — 로그인, 학습세션, 집중도 분석, 리포트, 온라인 네트워킹, 그룹 및 관리자 관리 → `docs/feature-spec.md`
-- [✅]  **Git 브랜치 전략 정의** — main / develop / feature/xxx / hotfix/xxx, PR 1인 리뷰 규칙 → `docs/git-convention.md`
-- [✅]  **API 명세서 초안 작성**
-    - 인증: `POST /auth/register`, `/auth/login`, `/auth/logout`
-    - 세션: `POST /sessions/start`, `/sessions/:id/log`, `/sessions/:id/end`
-    - 세션: `GET /sessions`, `/sessions/:id`
-    - 리포트: `GET /reports/:session_id`, `/reports/weekly`
-    - 소셜: `POST /connections/request`, `PATCH /connections/:id`, `GET /connections`
-    - 세션 공유: `POST /session-shares`, `GET /session-shares/feed`, `POST /session-shares/:id/reactions`
-    - 랭킹: `GET /rankings` (전체 / 친구 / 그룹 필터)
-    - 그룹: `POST /groups`, `GET /groups/:id`, `POST /groups/:id/invite`, `PATCH /groups/:id/members/:memberId`
-    - 그룹 목표: `POST /groups/:id/goals`, `GET /groups/:id/goals`, `POST /groups/:id/goals/:goalId/assignees`
-    - 관리자 피드백: `POST /groups/:id/feedbacks`, `GET /groups/:id/feedbacks`
-- [✅]  **JWT 인증 흐름 설계** — Stateless 토큰 기반, 만료 시간 정의 → `docs/auth-flow.md`
-- [✅]  **집중도 점수 산정 기준 협의** — `S = (Gaze × 0.4) + (Blink × 0.3) + (Head × 0.3)` 가중치 확정 → `docs/api-spec.md`, `backend/src/utils/focusScore.js`
-- [✅]  **프라이버시 설정 정책 설계** — default_session_scope (PUBLIC / FRIENDS / GROUP / PRIVATE), score_visibility, study_time_visibility, ranking_participation 옵션 정의 → `docs/api-spec.md`, `docs/feature-spec.md`, `prisma/schema.prisma`
-- [✅]  **랭킹 집계 기준 협의** — 집계 대상(ranking_participation=true인 사용자), 기간(일간/주간), 지표(평균 집중도 / 총 학습시간) 확정 → `docs/api-spec.md` §7
-- [✅]  **ERD 최종 확정 (팀 리뷰)**
-
-[FocusLens_ERD_최종점검.pdf](%EB%B0%B1%EC%97%94%EB%93%9C%20%EC%84%B8%EB%B6%80%20%EC%9D%BC%EC%A0%95%20%EB%B0%8F%20%EA%B5%AC%ED%98%84%20%EA%B3%84%ED%9A%8D/FocusLens_ERD_%E1%84%8E%E1%85%AC%E1%84%8C%E1%85%A9%E1%86%BC%E1%84%8C%E1%85%A5%E1%86%B7%E1%84%80%E1%85%A5%E1%86%B7.pdf)
-
-- [✅]  **API 명세 팀 리뷰 & 확정** — `docs/swagger.yaml` 팀 리뷰 및 인터페이스 합의 완료
-- [✅]  **Roll-up 전략 설계** — 30일 초과 concentration_logs → hourly_stats 집계 후 원본 삭제 / session_reactions 등 소셜 데이터 장기 보관 정책 별도 정의 → `docs/rollup-strategy.md`
-- [✅]  **보안 검증 정책 문서화** → `docs/security-policy.md`
-    - ① gaze/blink/head/total: 0~100 범위 float 검증
-    - ② session_id 소유자 = JWT sub 매칭
-    - ③ 1분 미만 중복 전송 차단
-    - ④ HTTPS 전송 강제 (배포 시)
-    - ⑤ 그룹 권한 검증 — group_members.group_role 기준 (OWNER / MANAGER / MEMBER), groups.owner_id 단독 판단 금지
-    - ⑥ 세션 공유 조회 — user_privacy_settings.default_session_scope 준수 여부 검증
-
----
-
-## Phase 2. 환경 구축
-
-> 📅 7/6 ~ 7/12 (1주)
-> 백엔드 서버 초기 설정, Docker 환경, DB 연결을 완료하고 팀 전체가 동일한 환경 세팅
-
-- [✅]  **Docker / docker-compose 설정**
-    - 서비스 구성: backend + postgres + redis
-    - `.env.example` 작성 및 팀 공유
-- [✅]  **Node.js + Express 서버 초기 세팅**
-    - 백엔드 런타임은 Node.js + Express, ORM은 Prisma로 확정
-    - 디렉토리 구조: `backend/src/routes`, `backend/src/controllers`, `backend/src/middleware`, `backend/src/models`
-- [✅]  **PostgreSQL 연결 & 전체 스키마 migration 실행**
-    - Prisma 설정
-    - 코어: users, sessions, concentration_logs, reports 테이블 생성
-    - 소셜: user_profiles, user_privacy_settings, user_connection_requests, user_connections, session_shares, session_reactions 테이블 생성
-    - 그룹: groups, group_members, group_invitations, group_goals, group_goal_assignees, manager_feedbacks 테이블 생성
-    - ERD 확정 제약조건 적용 — UNIQUE, CHECK(score BETWEEN 0 AND 100), CHECK(user_a_id <> user_b_id) 등 → `prisma/migrations/20260815000000_add_database_check_constraints/migration.sql`
-    - 시드 데이터(테스트 유저, 테스트 그룹) 스크립트 작성
-- [✅]  **조회용 View 초안 생성**
-    - `v_session_share_reaction_counts` — session_reactions를 session_share_id, reaction_type 기준 집계
-    - `v_user_session_summaries` — sessions, concentration_logs, reports 조인 세션 요약
-    - `v_group_member_stats` — 그룹 구성원별 완료 세션 누적 학습 통계 (현재 기간 필터 없음)
-    - `v_rankings` — ranking_participation=true 사용자 대상 집중도/학습시간 집계
-- [✅]  **환경변수(.env) 관리 구조 설정** — 로컬 / 개발 / 프로덕션 템플릿 분리 (`backend/.env.*.example`), 실제 비밀값은 Git 제외
-- [✅]  **기본 라우터 구조 생성** — 각 도메인별 라우터 파일 분리 (auth / sessions / reports / social / groups)
-- [✅]  **Health check API 구현** — `GET /health`: PostgreSQL·Redis 모두 연결 시 200, 하나라도 끊기면 503
-- [✅]  **Git repo 구조 및 브랜치 규칙 팀 확인**
-
----
-
-## Phase 3. MVP 핵심 개발
-
-> 📅 7/13 ~ 8/21 (5.5주)
->
-> ✅ **전체 완료 (2026-08-19)** — 인증·세션·리포트·소셜·그룹·관리자 기능과 공통 API 기반 구현 완료. Prisma 스키마 및 마이그레이션, Jest 테스트, PostgreSQL·Redis 연동 E2E, 동시성·데이터 무결성, Swagger 36개 API 명세를 재검증함.
-
-### 3-1. 인증 및 코어 기능
-
-> ✅ 완료 재검증 (2026-08-19): Prisma schema/migration 검증, Jest 19/19, PostgreSQL·Redis 연동 E2E 통과, 동시 세션 시작 20건 중 1건만 생성 확인
-
-- [✅]  **JWT 인증 미들웨어 구현**
-    - 모든 보호된 라우트에 적용
-    - 유효하지 않은 토큰 → 401 응답
-- [✅]  **회원가입 API** — `POST /api/auth/register`
-    - bcrypt 비밀번호 해싱
-    - 이메일 중복 검사
-    - 가입 시 user_profiles, user_privacy_settings 기본값 자동 생성 (default_session_scope=PRIVATE, ranking_participation=false)
-- [✅]  **로그인 API** — `POST /api/auth/login`
-    - JWT access token 발급 (만료 1시간)
-    - bcrypt 비밀번호 검증
-- [✅]  **로그아웃 API** — `POST /api/auth/logout`
-    - 토큰 해시를 남은 만료 시간 동안 Redis 블랙리스트에 저장
-- [✅]  **DB 스키마 구현** — 최종 확정된 ERD 기반 migration 실행
-- [✅]  **세션 시작 API** — `POST /api/sessions/start`
-    - Request: `{}` (`user_id`는 JWT `sub`에서 추출)
-    - Response: `201 + session_id`
-    - DB 부분 유니크 인덱스로 사용자별 IN_PROGRESS 세션 1개 보장
-- [✅]  **세션 종료 API** — `POST /api/sessions/:id/end`
-    - avg_score는 sessions에 저장하지 않고 리포트/조회 API에서 concentration_logs로 산출
-    - report 자동 생성 트리거 (summary_json에 gaze/blink/head 분리 통계 포함)
-    - Response: `200 + report_id`
-- [✅]  **집중도 로그 저장 API** — `POST /api/sessions/:id/log`
-    - Request: `{ gaze, blink, head, total, face_detected? }`; `total` 가중 합산값 검증, `face_detected` 생략 시 현재 `true`
-    - Response: `200`
-- [✅]  **로그 입력·권한·전송 간격 검증 구현**
-    - ① 점수 범위 검증 (0~100 float)
-    - ② session_id 소유자 검증 (JWT sub 매칭)
-    - ③ Redis `SET NX EX 60`으로 동일 세션 60초 미만 전송 차단
-    - 검증 실패 시 400/403 응답; 구조화된 보안 실패 로그는 Phase 4 점검 대상
-- [✅]  **분당 1회 요청 제한 로직** 구현
-- [✅]  **세션 평균 집중도 계산 로직** 구현 (concentration_logs 집계 기반, sessions 컬럼 저장 없음)
-- [✅]  **개별 세션 상세 조회** — `GET /api/sessions/:id`
-    - 분 단위 집중도 타임라인 포함
-- [✅]  **전체 세션 목록 조회** — `GET /api/sessions`
-    - 사용자별 세션 리스트, 최신순 정렬
-- [✅]  **세션별 집중도 리포트 조회** — `GET /api/reports/:session_id`
-    - 분 단위 타임라인 + gaze/blink/head 분리 통계 + 요약
-- [✅]  **주간 집중도 요약 API** — `GET /api/reports/weekly`
-    - 최근 7일 일별 평균 집중도
-- [✅]  **월간 집중도 API** — `GET /api/reports/monthly` (선택)
-
-### 3-2. 소셜 네트워킹 기능
-
-> ✅ 완료 재검증 (2026-08-19): Prisma schema/migration 검증, Jest 19/19, PostgreSQL·Redis 연동 E2E 통과, 친구 요청 수락·거절 동시 경쟁 25회 데이터 일관성 확인
-
-- [✅]  **프로필 조회/수정 API**
-    - `GET /api/users/:id/profile` — 공개 프로필 (nickname, bio, profile_image_url)
-    - `PATCH /api/users/me/profile` — 내 프로필 수정
-- [✅]  **프라이버시 설정 조회/수정 API**
-    - `GET /api/users/me/privacy` — 현재 공개 설정 조회
-    - `PATCH /api/users/me/privacy` — 공개 범위 수정 (default_session_scope, score_visibility 등)
-- [✅]  **친구 요청 API** — `POST /api/connections/request`
-    - requester_user_id ≠ receiver_user_id 검증 (자기 자신 요청 차단)
-    - 이미 연결된 관계 중복 요청 차단
-- [✅]  **친구 요청 수락/거절 API** — `PATCH /api/connections/:id`
-    - status: ACCEPTED → 두 사용자 ID를 정렬한 단일 `user_connections` 레코드 생성
-    - status: REJECTED → user_connection_requests 상태 업데이트만
-    - PENDING 상태를 원자적으로 선점해 동시 응답 중 하나만 처리
-- [✅]  **친구 목록 조회 API** — `GET /api/connections`
-- [✅]  **세션 공유 API** — `POST /api/session-shares`
-    - share_scope: PUBLIC / FRIENDS / GROUP 선택
-    - GROUP 공유 시 group_id 필수
-    - user_privacy_settings.default_session_scope 초과 공개 차단
-- [✅]  **소셜 피드 조회 API** — `GET /api/session-shares/feed`
-    - 친구 공개 세션 + 전체 공개 세션 통합 조회
-    - v_session_share_reaction_counts View를 통해 공감 개수 포함
-    - 조회 대상 세션 소유자의 score_visibility / study_time_visibility 준수
-- [✅]  **공감 반응 API** — `POST /api/session-shares/:id/reactions`
-    - reaction_type: LIKE / CHEER / EMPATHY
-    - UNIQUE(session_share_id, user_id, reaction_type) 중복 반응 차단
-- [✅]  **공감 반응 취소 API** — `DELETE /api/session-shares/:id/reactions/:reactionType`
-- [✅]  **랭킹 조회 API** — `GET /api/rankings`
-    - 쿼리 파라미터: `scope` (global / friends / group), `period` (daily / weekly), `metric` (focus_score / study_time)
-    - ranking_participation=false 사용자 제외
-    - v_rankings View 기반 집계
-
-### 3-3. 그룹 및 관리자 기능
-
-> ✅ 완료 검증 (2026-08-17): Prisma schema/migration 검증, Jest 11/11, PostgreSQL·Redis 연동 E2E 72/72 통과
-
-- [✅]  **그룹 생성 API** — `POST /api/groups`
-    - 생성자는 group_members에 group_role=OWNER로 자동 등록
-    - groups.created_by_user_id 설정 (이력 보존용, 권한은 group_members 기준)
-- [✅]  **그룹 상세 조회 API** — `GET /api/groups/:id`
-    - visibility 기준 접근 제어 (PUBLIC / PRIVATE)
-- [✅]  **그룹 목록 조회 API** — `GET /api/groups`
-    - 내가 속한 그룹 목록
-- [✅]  **그룹 초대 API** — `POST /api/groups/:id/invite`
-    - group_role=OWNER 또는 MANAGER만 초대 가능
-    - invite_code 생성, invitee_email 또는 invitee_user_id 지정
-    - expires_at 설정 (기본 7일)
-- [✅]  **초대 코드로 그룹 참여 API** — `POST /api/groups/join`
-    - invite_code 유효성 및 만료 검증
-    - 참여 시 group_members에 group_role=MEMBER로 등록
-- [✅]  **그룹 멤버 권한 변경 API** — `PATCH /api/groups/:id/members/:memberId`
-    - OWNER만 group_role 변경 가능
-- [✅]  **그룹 멤버 내보내기 API** — `DELETE /api/groups/:id/members/:memberId`
-    - OWNER / MANAGER만 실행 가능, OWNER 본인 내보내기 불가
-- [✅]  **그룹 대시보드 조회 API** — `GET /api/groups/:id/dashboard`
-    - v_group_member_stats View 기반 구성원별 학습 통계
-    - OWNER / MANAGER만 전체 구성원 데이터 조회, MEMBER는 자신 데이터만 조회
-- [✅]  **그룹 목표 생성 API** — `POST /api/groups/:id/goals`
-    - OWNER / MANAGER만 생성 가능
-    - target_study_minutes, target_focus_score, start_date, end_date 설정
-- [✅]  **그룹 목표 목록 조회 API** — `GET /api/groups/:id/goals`
-- [✅]  **그룹 목표 배정 API** — `POST /api/groups/:id/goals/:goalId/assignees`
-    - group_goal_assignees에 group_member_id 등록
-    - 전체 구성원 대상(목표 배정 없음)과 특정 멤버 배정 구분
-- [✅]  **관리자 피드백 작성 API** — `POST /api/groups/:id/feedbacks`
-    - manager_member_id: JWT sub 기준 group_members 조회 (group_role=OWNER 또는 MANAGER 검증)
-    - target_member_id, session_id(선택), content 저장
-- [✅]  **관리자 피드백 조회 API** — `GET /api/groups/:id/feedbacks`
-    - OWNER / MANAGER: 전체 피드백 조회
-    - MEMBER: 자신이 받은 피드백만 조회
-
-### 3-4. 공통
-
-> ✅ 완료 검증 (2026-08-19): Express 라우트·API 명세·Swagger 36/36 대조, Redocly OpenAPI lint 통과
-
-- [✅]  **전역 예외 처리 미들웨어** — 400 / 403 / 404 / 500 응답 표준화
-- [✅]  **Swagger 문서 정리** — 전체 API 엔드포인트 명세 완성
-    - Express `/api-docs`에서 Swagger UI 제공, `/api-docs/openapi.json`으로 원본 명세 조회
-- [✅]  **프론트엔드 팀 API 연동 지원** — CORS 설정, 응답 포맷 통일
-
----
-
-## Phase 4. 테스트 및 고도화
-
-> 📅 8/31 ~ 10/4 (5주)
-> 단위 테스트 작성, 보안 점검, Roll-up 스케줄러 구현, 통합 테스트 진행
->
-> 진행 재분류 (2026-08-19): 검증용 React 프런트엔드에서 목업 데이터 기반 MVP 흐름을 수동 확인하고, 동일 흐름의 실제 API 통합 시나리오 및 데이터 무결성 검사를 통과함. 프로덕션 프런트엔드 E2E는 프런트 구현 후 별도 확인 필요.
->
-> 현재 재검증 (2026-09-22): `npm test -- --runInBand` 5 suite·19 test 통과. 점수 유틸, 세션 시작 경쟁, 주간·월간 리포트의 완료 세션 필터, 친구 요청 원자적 상태 전이, 만료 초대 재발급을 다루는 mock 기반 단위 테스트다. 아래 Phase 4의 모든 시나리오가 완료됐다는 의미는 아니다. `python3 -m pytest ai/tests -q`는 현재 Python에 pytest가 없어 실행되지 않았다.
-
-- [ ]  **인증 모듈 단위 테스트**
-    - 정상 로그인, 잘못된 토큰, 만료 토큰 케이스
-- [ ]  **세션 API 테스트**
-    - 세션 시작/종료 정상 흐름
-    - 보안 검증 4조건 각각 테스트
-- [ ]  **리포트 API 테스트**
-    - 빈 세션, 정상 데이터, 날짜 필터 엣지케이스
-- [ ]  **소셜 기능 단위 테스트**
-    - 친구 요청 정상 흐름, 중복 요청 차단, 자기 자신 요청 차단
-    - 세션 공유: default_session_scope 초과 공개 차단 케이스
-    - 공감 반응 중복 차단 (UNIQUE 제약 검증)
-    - 랭킹 조회: ranking_participation=false 사용자 제외 확인
-- [ ]  **그룹 기능 단위 테스트**
-    - 그룹 생성 시 OWNER 자동 등록 확인
-    - 권한 검증: MEMBER가 초대/권한 변경/피드백 작성 시도 시 403 응답
-    - 초대 코드 만료 후 참여 시도 차단
-    - 대시보드 조회: MEMBER가 타인 데이터 조회 시도 시 403 응답
-    - 피드백 조회: MEMBER가 자신 대상 피드백만 수신 확인
-- [ ]  **Roll-up 스케줄러 구현**
-    - 매일 자정 실행 (cron)
-    - 30일 초과 concentration_logs → hourly_stats 집계 후 원본 삭제
-    - 단계별 추가 압축: hourly → daily → weekly
-- [ ]  **스케줄러 동작 테스트** — 수동 트리거로 집계 결과 검증
-- [ ]  **보안 점검**
-    - SQL Injection, XSS 취약점 점검
-    - 네트워크 오류 / 권한 오류 예외 처리 보완
-    - 그룹 권한 우회 시나리오 점검 (group_members 기준 검증 일관성 확인)
-    - 세션 공유 프라이버시 설정 우회 시나리오 점검
-- [ ]  **쿼리 성능 분석**
-    - `EXPLAIN ANALYZE`로 N+1 쿼리 확인
-    - concentration_logs `(session_id, logged_at)`, sessions `(user_id, started_at)` 기존 인덱스의 실제 실행 계획 확인
-    - session_shares `(session_id, share_scope, group_id)` 및 group_id가 NULL인 경우의 부분 UNIQUE 인덱스 적용 확인
-    - session_reactions `(session_share_id, user_id, reaction_type)`, group_members `(group_id, user_id)` 기존 UNIQUE 인덱스 확인
-    - v_rankings Materialized View 전환 검토 — 랭킹 조회 빈도 높을 경우 적용
-- [ ]  **View 성능 검증** — v_session_share_reaction_counts, v_user_session_summaries, v_group_member_stats, v_rankings 각 실행 계획 확인
-- [ ]  **프론트엔드 통합 테스트 지원**
-    - 검증용 MVP Quality Lab 구현 — 인증, 세션, 리포트, 소셜, 그룹, 랭킹 화면 및 API 콘솔
-    - 목업 사용자·집중도 데이터를 사용한 실제 API 통합 시나리오 통과, 사용자 수동 UI 검증 완료
-    - 프로덕션 프런트엔드 연동 흐름 E2E는 프런트 구현 후 별도 진행
-- [ ]  **AI 집중도 로그 통합 검증** — 로컬 AI 측정 결과의 1분 집계·JWT 전송을 실제 세션 시작/종료·리포트 흐름과 연결하고, 실패 재전송 및 측정 시각 정책 검증
-- [ ]  **통합 버그 수정** — 주간·월간 리포트 집계, 만료 그룹 초대 재발급, 동시성·관계 무결성 결함 수정 및 재검증
-- [ ]  **데이터 최적화** — 주간/월간 집계 쿼리 성능 재검증
-- [✅]  **API 문서 최종 업데이트** — Swagger 36개 API 명세·Express 라우트 대조 및 OpenAPI lint 통과
-
----
-
-## Phase 5. 배포 및 안정화
-
-> 📅 10/5 ~ 10/25 (3주)
-> AWS 인프라 구성, CI/CD 파이프라인 설정, 라이브 환경 검증 및 최종 발표 준비를 진행합니다.
-
-- [ ]  **AWS EC2 서버 구성**
-    - 인스턴스: t3.micro (프리티어)
-    - Node: PM2 프로세스 관리 / Python: gunicorn + nginx
-- [ ]  **AWS RDS PostgreSQL 셋업**
-    - 인스턴스: db.t3.micro
-    - 자동 백업 활성화
-    - 보안그룹: EC2 → RDS 내부 통신만 허용 (퍼블릭 DB 차단)
-- [ ]  **AWS S3 버킷 설정** — 리포트 파일 및 정적 에셋 저장
-- [ ]  **GitHub Actions CI/CD 파이프라인 구성**
-    - main 브랜치 push → 자동 테스트 → EC2 SSH 배포
-    - Secrets: GitHub Actions Secrets으로 환경변수 관리
-- [ ]  **프로덕션 환경변수 설정** — DB_URL, JWT_SECRET, REDIS_URL 등
-- [ ]  **라이브 서버 API 동작 확인** — `GET /health` 및 주요 API 엔드포인트 검증
-- [ ]  **프론트엔드 팀과 배포 환경 연동 확인**
-- [ ]  **성능 모니터링 설정**
-    - AWS CloudWatch: CPU, 메모리, 요청 수 기본 모니터링
-    - 헬스체크 엔드포인트 주기적 확인 설정
-- [ ]  **최종 버그 수정**
-- [ ]  **최종 보안 점검** — HTTPS 강제 적용, 민감 정보 노출 여부 확인
-- [ ]  **문서 정리 및 발표 자료 준비**
-    - API 명세 최종본 (Swagger)
-    - 아키텍처 다이어그램
-    - 기술 스택 및 구현 내용 정리
-
----
-
-## 📎 참고: 기술 스택 확정 체크리스트
-
-> Phase 1 시작 전 팀 미팅에서 확정 필요
-
-- [✅]  백엔드 언어: **Node.js + Express** 확정
-- [✅]  ORM: **Prisma** 확정
-- [ ]  데이터베이스 호스팅: **Supabase** (빠른 셋업) vs **AWS RDS** (확장성)
-- [ ]  AI 최종 실행 위치: 현재 구현은 **로컬 Python 클라이언트(OpenCV + MediaPipe Face Landmarker)**이며 브라우저 MediaPipe.js나 서버 FastAPI 서비스로 배치되지 않음. 제품 연동 방식은 별도 확정 필요
-- [✅]  레포 구조: **모노레포** 확정
-
----
-
-## 📎 AI 구현 현황 (2026-09-22)
-
-> `ai/`는 백엔드와 분리된 Python 3.11 실행 프로그램이다. 이 현황표를 진행 상태의 기준으로 삼고, 구현 근거는 `ai/README.md` 및 소스 코드, 후속 설계는 `ai/FocusLens_focus_log_implementation_plan.md`에서 확인한다. 아래 상태는 백엔드 Phase 3 완료 여부와 별개다.
-
-- [✅] OpenCV 웹캠 입력, MediaPipe Face Landmarker 모델 자동 다운로드·초기화, 약 10 FPS 프레임 샘플링
-- [✅] 프레임별 얼굴 검출, 양쪽 홍채 상대 위치 기반 `gaze_x/gaze_y`, `eyeBlinkLeft/Right`와 단일 프레임 눈 감김, 변환 행렬 기반 `yaw/pitch/roll` 추출
-- [✅] 랜드마크·시선·머리 방향·수치 막대 디버그 화면과 프레임 측정값 JSON 출력
-- [✅] 가중치 0.4/0.3/0.3의 `total` 계산 함수 및 `POST /api/sessions/:id/log` 호출용 JWT API 클라이언트 구현 (실시간 측정 흐름과는 미연결)
-- [ ] 사용자별 gaze/head 보정, blink 이벤트·장시간 눈 감김 판정
-- [ ] 1분 버퍼, `gaze/blink/head` 점수 집계, 얼굴 검출 비율 기반 `face_detected` 산출
-- [ ] 실시간 측정→API 전송 연결, 실패 전송 재시도 큐, 실제 카메라·백엔드 통합 검증
-
----
-
-## 📎 참고: API 보안 검증 정책
-
-POST `/api/sessions/:id/log` 수신 시 아래 조건을 반드시 검증합니다.
-검증 실패 시 400/403 응답과 로그 기록을 반환합니다.
-
-| 번호 | 검증 항목 | 실패 응답 |
-| --- | --- | --- |
-| ① | gaze/blink/head/total: 0~100 범위 float | 400 |
-| ② | session_id 소유자 = JWT sub 매칭 | 403 |
-| ③ | 1분 미만 중복 전송 차단 | 400 |
-| ④ | HTTPS 전송 여부 (배포 시 강제) | — |
-| ⑤ | 그룹 권한: group_members.group_role 기준 (groups.created_by_user_id 단독 판단 금지) | 403 |
-| ⑥ | 세션 공유 조회: user_privacy_settings.default_session_scope 초과 공개 차단 | 403 |
-
----
-
-## 📎 참고: 집중도 점수 산정 알고리즘
-
-```
-S = (Gaze × 0.4) + (Blink × 0.3) + (Head × 0.3)
-```
-
-| 점수 구간 | 상태 |
+| 항목 | 확인 결과 |
 | --- | --- |
-| S ≥ 70 | 집중 상태 ✅ |
-| 40 ≤ S < 70 | 보통 🟡 |
-| S < 40 | 집중 이탈 경고 🔴 |
-
-- **Gaze 점수**: 측정 구간 내 화면 응시 비율 × 100
-- **Blink 점수**: 정상 깜빡임 범위 내 비율 기반 (너무 많거나 적으면 감점)
-- **Head 점수**: 측정 구간 내 정면 자세 유지 비율 × 100
+| API | Express 라우터 8개 도메인과 OpenAPI 36개 operation 존재 |
+| 데이터 | Prisma 모델 19개, PostgreSQL 마이그레이션 10개, 조회 View 5개 존재 |
+| 인증 | JWT Access Token, Redis 로그아웃 블랙리스트 구현 |
+| 세션 로그 | 필수 얼굴 상태·0점 규칙, 서버 분 구간, DB 멱등 저장, Serializable 종료 경쟁 처리 구현 |
+| 테스트 | 2026-10-06 기준 Jest 12 suite, 73 test 및 임시 PostgreSQL Roll-up·성능 검증 통과 |
+| 미구현 | Phase 5 인프라·배포 자동화·운영 검증 |
 
 ---
 
-## 📎 참고: 조회용 View 목록
+## Phase 1. 백엔드 설계
 
-파생 데이터(공감 개수, 랭킹, 기간별 평균 등)는 기본 테이블에 저장하지 않고 아래 View 또는 API 조회 시 계산합니다. 랭킹 조회 빈도가 높을 경우 v_rankings는 Materialized View 전환을 검토합니다.
+- [✅] ERD와 데이터 파생 원칙 확정
+    - `sessions`에 `avg_focus_score`, `duration_seconds`를 저장하지 않는다.
+    - 공감 수, 랭킹 등 파생 값은 View 또는 조회 시 계산한다.
+- [✅] `{ success, data, error }` 응답 형식과 400/401/403/404/409/500 오류 기준 확정
+- [✅] JWT 인증과 세션 소유권 검증 기준 확정
+- [✅] 그룹 권한을 `group_members.group_role`로 판단하도록 확정
+- [✅] 세션 공유에 `user_privacy_settings.default_session_scope`를 적용하도록 확정
+- [✅] 집중도 점수식을 `gaze × 0.4 + blink × 0.3 + head × 0.3`으로 확정
+- [✅] 30일 이후 집중도 원본을 집계하는 Roll-up 정책 설계
 
-| View 이름 | 집계 기준 | 사용 목적 |
-| --- | --- | --- |
-| v_session_share_reaction_counts | session_reactions를 session_share_id, reaction_type 기준 집계 | 피드에서 좋아요/응원/공감 개수 표시 |
-| v_user_session_summaries | sessions, concentration_logs, reports 조인 | 내 기록/공개 피드의 세션 카드 표시 |
-| v_group_member_stats | group_members와 완료 세션의 누적 기록 집계 (현재 기간 필터 없음) | 관리자 그룹 대시보드 |
-| v_rankings | ranking_participation=true 사용자의 세션만 집계 | 전체/친구/그룹 랭킹 |
+## Phase 2. 백엔드 환경 구축
+
+- [✅] Node.js, Express, Prisma 프로젝트 구성
+- [✅] PostgreSQL과 Redis 연결
+- [✅] Docker Compose 개발 환경 구성
+- [✅] 환경변수 예시와 비밀값 제외 규칙 구성
+- [✅] Prisma 마이그레이션과 시드 구성
+- [✅] `GET /health`에서 PostgreSQL·Redis 상태 확인
+- [✅] Swagger UI와 OpenAPI 제공
+
+## Phase 3. 백엔드 MVP API
+
+- [✅] 회원가입, 로그인, 로그아웃과 JWT 인증
+- [✅] 세션 시작, 집중도 로그 저장, 세션 종료
+- [✅] 세션 목록·상세 및 주간·월간 리포트
+- [✅] 프로필과 프라이버시 설정
+- [✅] 친구 요청·수락·거절과 친구 목록
+- [✅] 세션 공유, 피드, 공감 반응
+- [✅] 전체·친구·그룹 랭킹
+- [✅] 그룹, 초대, 멤버 권한, 목표, 관리자 피드백
+- [✅] 공통 입력 검증과 전역 오류 처리
+
+---
+
+## Phase 4. 백엔드 검증 및 고도화
+
+Phase 4는 아래 순서대로 진행한다. 각 단계의 테스트가 통과한 후 다음 단계로 이동한다.
+
+### 4-1. 로그 수신 계약과 DB 무결성
+
+- [✅] 현재 AI 요청 형식만 사용하는 백엔드 로그 계약을 `docs/api-spec.md`, `docs/swagger.yaml`, `docs/security-policy.md`에 명시
+- [✅] `face_detected`를 필수 boolean으로 검증
+- [✅] `face_detected=false`일 때 `gaze`, `blink`, `head`, `total`이 모두 0인지 검증
+- [✅] 서버가 `total`을 다시 계산하고 소수 둘째 자리로 정규화하여 저장
+- [✅] 세션 `started_at`과 서버 수신 시각으로 1부터 시작하는 분 구간 번호 산출
+- [✅] `concentration_logs`에 서버 산출 분 구간 컬럼을 추가하고 `(session_id, minute_index)` UNIQUE 제약 적용
+- [✅] 같은 분 구간·같은 정규화 점수는 기존 로그를 반환하고, 다른 점수는 409 반환
+- [✅] DB UNIQUE 제약과 Serializable 트랜잭션을 정확성 기준으로 사용
+- [✅] Redis 60초 키와 관련 코드를 로그 정확성 경로에서 제거
+- [✅] 종료된 세션에 들어오는 로그 요청은 409 반환
+
+**완료 조건**
+
+- 동시 요청에서도 분 구간당 DB 행이 한 개만 생성된다.
+- 백엔드 단위·통합 테스트로 동일 요청, 다른 내용 충돌, 세션 종료 경쟁을 검증한다.
+- 기존 AI 요청 payload로 호출할 수 있으며 `ai/` 파일 변경이 없다.
+
+> 완료 검증 (2026-09-30): Jest 5 suite·27 test 통과. 빈 임시 PostgreSQL DB에 전체 7개 마이그레이션을 적용하고 실제 API에서 동일 로그 동시 요청 2건이 같은 `log_id`·200을 반환하며 DB에는 한 행만 저장되는 것을 확인했다. 같은 구간의 다른 내용과 종료 후 요청은 409를 반환했다.
+
+### 4-2. 인증·권한·프라이버시 테스트
+
+- [✅] 회원가입·로그인 정상 흐름, 잘못된 비밀번호, 만료·변조 JWT 테스트
+- [✅] 로그아웃된 JWT의 Redis 블랙리스트 차단과 Redis 장애 동작 테스트
+- [✅] 모든 보호 라우트의 무토큰 요청 401 검증
+- [✅] 세션·리포트의 타 사용자 접근 403 검증
+- [✅] 그룹 OWNER·MANAGER·MEMBER별 허용 및 거부 시나리오 검증
+- [✅] 그룹 권한 판정이 `groups.created_by_user_id`에 의존하지 않는지 점검
+- [✅] 공유 생성과 피드 조회에서 공개 범위·점수·학습 시간 노출 정책 검증
+- [✅] 친구 요청·공감·초대·세션 시작의 동시성 및 UNIQUE 충돌 테스트
+- [✅] SQL Injection 입력과 저장형 XSS 문자열의 API 저장·반환 동작 점검
+- [✅] 오류 응답이 내부 스택, SQL, 토큰, 비밀번호 해시를 노출하지 않는지 검증
+
+**완료 조건**
+
+- 보호 라우트와 역할 경계를 포함하는 자동 테스트가 통과한다.
+- 발견된 권한 우회와 민감 정보 노출 문제가 모두 수정된다.
+
+> 완료 검증 (2026-10-02): Jest 9 suite·54 test 통과. 빈 임시 PostgreSQL DB에 전체 7개 마이그레이션과 조회 View를 적용하고 로컬 Redis를 사용한 실제 API E2E를 실행했다. OpenAPI의 보호 operation 34개가 모두 무토큰 401을 반환했다. 회원가입·로그인·만료/변조/로그아웃 토큰, 세션·리포트 교차 사용자 403, OWNER·MANAGER·MEMBER 역할 경계와 생성자 비권한, 공유 범위·필드 마스킹·설정 하향, 친구 요청·초대·공감·세션 시작 동시 충돌을 확인했다. SQL·스크립트 형태 문자열은 실행 없이 원문으로 저장·반환됐고 DB 행은 유지됐다. Redis 블랙리스트 조회와 로그아웃 등록 실패는 단위 테스트에서 fail-closed 503을 확인했다.
+
+### 4-3. 리포트와 조회 정합성
+
+- [✅] 빈 세션, 로그 한 건, 여러 로그, 얼굴 미검출 로그의 리포트 결과 검증
+- [✅] 세션 종료와 리포트 생성이 하나의 트랜잭션으로 처리되는지 검증
+- [✅] 세션 상세, 주간·월간 리포트의 평균·기간·상태별 건수 계산 통일
+- [✅] 시간대 경계, 월말, 윤년, 빈 날짜 구간 테스트
+- [✅] 공유 피드·랭킹·그룹 대시보드에서 완료 세션 필터와 프라이버시 조건 검증
+- [✅] `sessions`에 파생 평균·기간을 저장하지 않는 ERD 원칙 재확인
+
+**완료 조건**
+
+- 동일 원본 로그에 대해 세션·리포트·랭킹의 수치가 정의된 기준과 일치한다.
+- 조회 API의 빈 결과 형식과 날짜 경계가 테스트로 고정된다.
+
+> 완료 검증 (2026-10-02): Jest 10 suite·67 test 통과. 빈 임시 PostgreSQL DB에 전체 8개 마이그레이션과 조회 View를 적용하고 로컬 Redis를 사용한 실제 API E2E를 실행했다. 빈 로그·얼굴 미검출 0점·여러 로그의 평균과 상태별 건수, 세션 상세·종료 리포트·기간 리포트 수치 일치, 리포트 INSERT 실패 시 세션 종료 롤백을 확인했다. 일별 기준을 세션 시작 시각의 UTC 날짜로 통일하고 UTC 자정, 월말, 2024년 윤년, 빈 7일·30일 구간을 검증했다. 공유 피드·반응·랭킹은 완료 세션만 사용하며 랭킹 참여와 그룹 데이터 공유 설정이 View 결과에 반영된다. `sessions` 테이블에 파생 평균·기간 컬럼이 없음을 실제 DB 메타데이터로 재확인했다.
+
+### 4-4. Roll-up 구현
+
+- [✅] `hourly_stats`, `daily_stats`, `weekly_stats` Prisma 모델과 마이그레이션 추가
+- [✅] 집계 테이블에 `(session_id, bucket_start)` UNIQUE 제약 적용
+- [✅] 원본 집계, 집계 결과 검증, 원본 삭제를 한 트랜잭션으로 처리
+- [✅] 같은 범위를 여러 번 실행해도 결과가 같도록 UPSERT 구현
+- [✅] 수동 실행 가능한 백엔드 명령과 운영 스케줄러 구현
+- [✅] 실패 시 원본이 삭제되지 않는지 테스트
+- [✅] 세션·리포트·랭킹·그룹 통계가 원본과 집계 데이터를 함께 읽도록 변경
+- [✅] 원본 삭제 전후 평균, 로그 수, 조회 권한이 동일한지 검증
+
+**완료 조건**
+
+- Roll-up 재실행이 중복 집계를 만들지 않는다.
+- 집계 실패 시 데이터 손실이 없다.
+- 30일 초과 원본 삭제 전후 장기 조회 결과가 유지된다.
+
+> 완료 검증 (2026-10-05): Jest 11 suite·71 test 통과. 빈 임시 PostgreSQL DB에 전체 9개 migration을 적용했다. 40일·100일·400일 전의 7개 원본 로그를 실행해 `hourly_stats` 1행(원본 2건), `daily_stats` 1행(3건), `weekly_stats` 1행(2건)으로 압축했다. 삭제 전후 세션별 평균·로그 수·상태별 건수·얼굴 미검출 건수와 `v_user_session_summaries`, `v_rankings` 값이 일치했다. 동일 명령 재실행은 세 단계 모두 0건이었으며, 강제 INSERT 오류 시 원본 1건 보존과 대상 집계 0건을 확인했다. 세션·리포트·피드 컨트롤러와 랭킹·그룹 View는 원본과 집계 tier를 합친 `v_session_metric_totals`를 사용한다. 다음 작업은 4-5 쿼리 성능과 운영 안정성이다.
+
+### 4-5. 쿼리 성능과 운영 안정성
+
+- [✅] 주요 API의 실제 PostgreSQL 쿼리를 수집하고 N+1 여부 점검
+- [✅] `EXPLAIN ANALYZE`로 세션, 로그, 피드, 랭킹, 그룹 대시보드 실행 계획 확인
+- [✅] 조회 패턴에 필요한 복합·부분 인덱스를 마이그레이션으로 추가
+- [✅] 목록 API의 페이지 크기 제한과 안정적인 정렬 키 검증
+- [✅] 큰 기간 조회에 응답 크기 제한 또는 페이지 처리 적용
+- [✅] Redis 연결 실패가 JWT 블랙리스트와 Health check에 미치는 영향 명확화
+- [✅] 요청 ID, 사용자 ID, 경로, 상태 코드, 처리 시간을 포함한 구조화 로그 추가
+- [✅] 인증 실패, 권한 거부, DB 오류, Roll-up 실패에 대한 운영 메트릭 정의
+
+**완료 조건**
+
+- 성능 시나리오와 허용 기준을 문서에 기록한다.
+- 주요 조회가 의도한 인덱스를 사용하고 임계값을 넘는 쿼리가 없다.
+- 장애 시 오류 응답과 운영 로그가 일관된다.
+
+> 완료 검증 (2026-10-06): 사용자 1,001명, 세션 10,010개, 집중도 로그 100,100개, 공유 5,000개 규모의 임시 PostgreSQL 16 DB에서 실행 계획을 확인했다. 세션 목록 0.248ms, 타임라인 0.030ms, 피드 0.220ms, 주간 랭킹 64.676ms, 그룹 멤버 페이지 0.022ms, 그룹 통합 지표 2.183ms로 정한 DB 임계값 안에 들었다. 피드·그룹 대시보드의 전체 선조회와 N+1 경로를 페이지 단위 일괄 조회로 바꾸고 목록 기본 20·최대 100건과 안정 정렬을 적용했다. 복합·부분 인덱스 마이그레이션, 요청 ID 기반 JSON 로그, 실패·의존성·Roll-up 카운터와 Redis fail-closed 계약을 추가했다. Jest 12 suite·73 test, Prisma format/validate, OpenAPI 36 operation 파싱이 통과했고 빈 DB에 전체 10개 migration과 핵심 인덱스가 생성됨을 확인했다. 상세 시나리오와 결과는 `docs/performance-operations.md`를 따른다. 다음 작업은 Phase 4 최종 게이트다.
+
+### Phase 4 최종 게이트
+
+- [✅] 전체 Jest 테스트 통과
+- [✅] PostgreSQL·Redis를 사용한 실제 API 통합 테스트 통과
+- [✅] Prisma 마이그레이션을 빈 DB와 기존 데이터 DB에 각각 적용 검증
+- [✅] OpenAPI lint와 실제 Express 라우트 대조 통과
+- [✅] `ai/`와 `frontend/` 변경이 없는지 Git diff 확인
+- [✅] Phase 4 완료 결과와 남은 외부 연동 항목을 이 문서에 기록
+
+> 최종 검증 (2026-10-06): Jest 12 suite·73 test, Prisma format/validate, JavaScript 구문과 Git diff 검사를 통과했다. 빈 PostgreSQL 16 DB에는 저장소의 10개 migration을 모두 적용했고, 사용자 16행·세션 11행이 있던 개발 DB 복제본에는 미적용 3개 migration을 적용한 뒤 기존 행, View 5개와 핵심 인덱스를 확인했다. 실제 Redis와 복제 DB에 연결한 최신 서버에서 Health→회원가입→세션 시작→멱등 로그·충돌→종료→리포트→로그아웃 토큰 차단 흐름이 통과했다. `npm run verify:openapi`으로 Express와 OpenAPI 36개 operation이 일치함을 확인했으며 `ai/`, `frontend/` 변경은 없다. 통합 점검에서 발견한 구조화 로그의 축약 경로와 메트릭 `/` 라벨은 전체 요청 경로 기록과 UUID 구간 정규화로 수정했다. 상세 증거와 외부 연동 대기 항목은 `docs/phase4-verification.md`에 기록한다.
+
+---
+
+## Phase 5. 백엔드 배포 및 안정화
+
+Phase 4 최종 게이트를 통과한 뒤 진행한다.
+
+### 5-1. 인프라
+
+- [ ] AWS 실행 환경과 네트워크 구조 확정
+- [ ] RDS PostgreSQL을 비공개 서브넷 또는 제한된 보안 그룹으로 구성
+- [ ] Redis 운영 서비스와 장애 정책 확정
+- [ ] 운영용 환경변수와 비밀값 저장소 구성
+- [ ] DB 자동 백업, 보존 기간, 복원 절차 설정
+
+### 5-2. CI/CD
+
+- [ ] Pull Request에서 Jest, Prisma 검증, OpenAPI lint 실행
+- [ ] 배포 전 마이그레이션 호환성 검사
+- [ ] 승인된 브랜치의 백엔드 이미지 또는 패키지만 배포
+- [ ] 마이그레이션 실패와 Health check 실패 시 배포 중단
+- [ ] 애플리케이션 롤백과 DB 복구 절차 문서화
+
+### 5-3. HTTPS와 보안
+
+- [ ] TLS 인증서와 HTTP→HTTPS 리다이렉트 구성
+- [ ] Express `trust proxy`, HSTS, 보안 헤더 설정
+- [ ] 운영 CORS 허용 출처 제한
+- [ ] JWT, DB URL, Redis URL이 로그와 응답에 노출되지 않는지 확인
+- [ ] 의존성 취약점과 운영 권한 점검
+
+### 5-4. 모니터링과 라이브 검증
+
+- [ ] `/health` 외에 준비 상태와 생존 상태 확인 방식 정의
+- [ ] API 오류율, 지연 시간, DB 연결, Redis 연결, Roll-up 잡 모니터링
+- [ ] 로그 보존 기간과 알림 임계값 설정
+- [ ] 운영 환경에서 인증→세션→로그→종료→리포트 API 흐름 검증
+- [ ] 백업 복원 연습과 장애 대응 문서 검증
+
+**Phase 5 완료 조건**
+
+- HTTPS 라이브 API가 정상 응답한다.
+- CI/CD가 테스트와 마이그레이션 검증을 통과한 변경만 배포한다.
+- 모니터링 알림과 DB 복원 절차를 실제로 확인한다.
+
+---
+
+## 2. 외부 연동 대기 항목
+
+다음 항목은 백엔드 구현을 막지 않으며 현재 계획의 완료 기준에서 제외한다.
+
+- 실제 AI 카메라 측정과 1분 집계 정확도 검증
+- AI 클라이언트의 오프라인 큐와 JWT 갱신
+- 원래 측정 시각과 클라이언트 요청 ID를 포함하는 차기 로그 계약
+- 제품 프런트엔드 로그인·세션·리포트 E2E
+- 브라우저에서 저장형 XSS 문자열이 표시되는 방식 검증
+
+백엔드는 이 항목들이 준비되기 전까지 문서화된 HTTP 계약과 fixture로 독립 검증한다.
+
+## 3. 다음 실행 순서
+
+1. Phase 4-1 로그 수신 계약과 DB 무결성 — 완료
+2. Phase 4-2 인증·권한·프라이버시 테스트 — 완료
+3. Phase 4-3 리포트와 조회 정합성 — 완료
+4. Phase 4-4 Roll-up 구현 — 완료
+5. Phase 4-5 성능·운영 안정성 — 완료
+6. Phase 4 최종 게이트 — 완료
+7. Phase 5-1 인프라 설계 — 다음 작업

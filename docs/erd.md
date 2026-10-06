@@ -2,7 +2,7 @@
 
 세션 기록 공유, 공감 기능, 온라인 네트워킹, 그룹 및 관리자 관리 시스템을 반영한 최종 ERD입니다.
 
-**구현 상태 (2026-09-22):** 아래 16개 기본 테이블은 `prisma/schema.prisma`와 마이그레이션에 정의돼 있다. `prisma/views.sql`과 마이그레이션에는 조회 View 4개가 있으며 Materialized View는 없다. `hourly_stats`, `daily_stats`, `weekly_stats`는 Roll-up 설계에만 있고 현재 스키마에는 없다. AI의 프레임 측정값은 아직 자동으로 `concentration_logs`에 전송되지 않는다.
+**구현 상태 (2026-10-06):** 16개 도메인 테이블과 `hourly_stats`, `daily_stats`, `weekly_stats`를 합친 Prisma 모델 19개가 스키마와 마이그레이션에 정의돼 있다. `prisma/views.sql`과 마이그레이션에는 조회 View 5개가 있으며 Materialized View는 없다. 목록·피드·랭킹·그룹 조회용 복합·부분 인덱스는 Phase 4-5 마이그레이션에 반영됐다. AI의 프레임 측정값은 아직 자동으로 `concentration_logs`에 전송되지 않는다.
 
 ---
 
@@ -42,7 +42,10 @@
 | user_profiles | id(PK), user_id(FK, UNIQUE), nickname, profile_image_url, bio, created_at, updated_at | 네트워킹 공개 프로필 |
 | user_privacy_settings | id(PK), user_id(FK, UNIQUE), default_session_scope, score_visibility, study_time_visibility, group_data_sharing, ranking_participation, created_at, updated_at | 학습 데이터 공개 범위 설정 |
 | sessions | id(PK), user_id(FK), started_at, ended_at, status, created_at, updated_at | 사용자 학습 세션 원본 기록 |
-| concentration_logs | id(PK), session_id(FK), logged_at, gaze_score, blink_score, head_score, focus_score, attention_state, face_detected, created_at | 분 단위 집중도 타임라인 기록 |
+| concentration_logs | id(PK), session_id(FK), minute_index, logged_at, gaze_score, blink_score, head_score, focus_score, attention_state, face_detected, created_at | 서버가 구분한 분 단위 집중도 타임라인 기록 |
+| hourly_stats | id(PK), session_id(FK), bucket_start, 점수 평균 4개, log_count, 상태별 건수, face_not_detected_count | 30일 초과 원본의 UTC 시간 집계 |
+| daily_stats | id(PK), session_id(FK), bucket_start, 점수 평균 4개, log_count, 상태별 건수, face_not_detected_count | 90일 초과 시간 집계의 UTC 일 집계 |
+| weekly_stats | id(PK), session_id(FK), bucket_start, 점수 평균 4개, log_count, 상태별 건수, face_not_detected_count | 365일 초과 일 집계의 UTC 주 집계 |
 | reports | id(PK), session_id(FK, UNIQUE), summary_json, created_at | 세션 종료 후 생성되는 리포트 산출물 |
 
 AI 경계 (2026-09-22): `ai/`의 Python·MediaPipe 프로그램은 현재 프레임별 얼굴 검출, 시선·눈 깜빡임·머리 자세 특징을 추출하지만 웹캠 파이프라인에서 백엔드로 자동 전송하지 않는다. 프레임 원본·랜드마크·보정값을 저장하는 테이블은 이 ERD에 없다. 후속 1분 집계 결과만 `POST /api/sessions/:id/log`를 거쳐 `concentration_logs`에 저장하는 설계이며, 1분 집계 자체는 아직 미구현이다.
@@ -76,7 +79,8 @@ AI 경계 (2026-09-22): `ai/`의 Python·MediaPipe 프로그램은 현재 프레
 | users - user_profiles | 1 : 1 | user_profiles.user_id UNIQUE |
 | users - user_privacy_settings | 1 : 1 | user_privacy_settings.user_id UNIQUE |
 | users - sessions | 1 : N | 사용자 1명은 여러 학습 세션을 생성 |
-| sessions - concentration_logs | 1 : N | UNIQUE(session_id, logged_at) 권장 |
+| sessions - concentration_logs | 1 : N | UNIQUE(session_id, minute_index) |
+| sessions - hourly_stats/daily_stats/weekly_stats | 1 : N | 각 tier에 UNIQUE(session_id, bucket_start) |
 | sessions - reports | 1 : 1 | 완료 세션 1개는 리포트 1개 생성. reports.session_id UNIQUE |
 | sessions - session_shares | 1 : N | 세션은 공개 범위별로 공유 가능. 동일 scope 중복 공유 방지 필요 |
 | session_shares - session_reactions | 1 : N | 공유 세션 1개는 여러 공감 반응을 받을 수 있음 |
@@ -96,7 +100,8 @@ AI 경계 (2026-09-22): `ai/`의 Python·MediaPipe 프로그램은 현재 프레
 | users | UNIQUE(email) |
 | user_profiles | UNIQUE(user_id), UNIQUE(nickname) |
 | user_privacy_settings | UNIQUE(user_id) |
-| concentration_logs | UNIQUE(session_id, logged_at), CHECK(score BETWEEN 0 AND 100) |
+| concentration_logs | UNIQUE(session_id, minute_index), CHECK(minute_index >= 1), CHECK(score BETWEEN 0 AND 100) |
+| hourly_stats, daily_stats, weekly_stats | UNIQUE(session_id, bucket_start), CHECK(score BETWEEN 0 AND 100), CHECK(상태 건수 합 = log_count) |
 | reports | UNIQUE(session_id) |
 | user_connection_requests | CHECK(requester_user_id <> receiver_user_id) |
 | user_connections | UNIQUE(user_a_id, user_b_id), CHECK(user_a_id <> user_b_id) |
@@ -106,18 +111,28 @@ AI 경계 (2026-09-22): `ai/`의 Python·MediaPipe 프로그램은 현재 프레
 | group_invitations | UNIQUE(invite_code) |
 | group_goal_assignees | UNIQUE(group_goal_id, group_member_id) |
 
+### Phase 4-5 조회 인덱스
+
+- 세션: `(user_id, status, started_at DESC, id DESC)`, 완료 세션의 `started_at` 및 `started_at::DATE` 부분 인덱스
+- 공유: 활성·미삭제 행의 `(created_at DESC, id DESC)`와 `(share_scope, group_id, created_at DESC, id DESC)` 부분 인덱스
+- 친구: 요청자·수신자의 상태/생성 시각, 연결 양쪽 사용자의 생성 시각 복합 인덱스
+- 그룹: 사용자별 참여 목록, 그룹별 역할·참여 순서, 목표와 피드백 목록 복합 인덱스
+
+Prisma의 `DateTime` 컬럼은 PostgreSQL `timestamp(3)`이며 애플리케이션이 UTC 값을 저장한다. 기간 집계의 UTC 날짜 인덱스는 `started_at::DATE` 표현식을 사용한다. 실제 실행 계획과 측정값은 `docs/performance-operations.md`에 기록한다.
+
 ---
 
 ## 6. 조회용 View 권장 사항
 
-현재 파생 데이터는 기본 테이블에 저장하지 않고 `prisma/views.sql`의 일반 View 4개 또는 컨트롤러 조회 시 계산한다. 랭킹 조회 빈도가 높을 경우 `v_rankings`의 Materialized View 전환은 Phase 4 검토 사항이다.
+현재 파생 데이터는 `prisma/views.sql`의 일반 View 5개 또는 컨트롤러 조회 시 계산한다. Roll-up 테이블은 장기 원본을 대체하는 보관 tier이며 세션 테이블에 파생 평균을 중복 저장하지 않는다. Phase 4-5 측정에서 주간 랭킹은 허용 기준 안에 들어 Materialized View로 전환하지 않았다. 운영 p95가 기준을 넘으면 다시 검토한다.
 
 | View 이름 | 집계 기준 | 사용 목적 |
 | --- | --- | --- |
 | v_session_share_reaction_counts | session_reactions를 session_share_id, reaction_type 기준으로 집계 | 피드에서 좋아요/응원/공감 개수 표시 |
-| v_user_session_summaries | sessions, concentration_logs, reports를 조인하여 세션 요약 생성 | 내 기록/공개 피드의 세션 카드 표시 |
-| v_group_member_stats | group_members와 완료 세션의 누적 기록을 집계 | 관리자 그룹 대시보드 (현재 기간 필터 없음) |
-| v_rankings | ranking_participation=true가 허용된 세션만 집계 | 전체/친구/그룹 랭킹 |
+| v_session_metric_totals | 원본과 시간·일·주 tier를 세션별 가중 합계로 통합 | Roll-up 전후 평균·로그 수·상태 건수 유지 |
+| v_user_session_summaries | sessions, v_session_metric_totals, reports를 조인하여 세션 요약 생성 | 내 기록/공개 피드의 세션 카드 표시 |
+| v_group_member_stats | 활성 group_members와 `group_data_sharing=true` 사용자의 완료 세션 누적 기록 | 관리자 그룹 대시보드 (현재 기간 필터 없음) |
+| v_rankings | `ranking_participation=true` 사용자의 완료 세션을 UTC 시작일로 집계 | 전체/친구/그룹 랭킹 |
 
 > **설계 기준**: 기본 테이블에는 원본 사실 데이터만 저장하고, 좋아요 수/랭킹/기간별 평균 등 파생 값은 조회 시 계산하거나 별도 View로 관리한다.
 
@@ -125,7 +140,7 @@ AI 경계 (2026-09-22): `ai/`의 Python·MediaPipe 프로그램은 현재 프레
 
 ## 7. 핵심 설계 원칙 (Cursor 작업 시 반드시 준수)
 
-- `sessions`에 `avg_focus_score`, `duration_seconds` 컬럼 추가 금지 — 조회 시 `concentration_logs`에서 계산
+- `sessions`에 `avg_focus_score`, `duration_seconds` 컬럼 추가 금지 — 조회 시 원본과 Roll-up tier에서 계산
 - 그룹 권한은 반드시 `group_members.group_role` 기준으로 판단 — `groups.created_by_user_id` 단독 판단 금지
 - 세션 공유 조회 시 `user_privacy_settings.default_session_scope` 준수 필수
 - 공감 수, 랭킹 등 파생 값은 기본 테이블에 저장하지 않고 위 View에서 산출

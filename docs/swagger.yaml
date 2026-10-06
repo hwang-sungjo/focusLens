@@ -2,11 +2,13 @@ openapi: 3.0.3
 info:
   title: FocusLens API
   description: |
-    FocusLens 백엔드 Phase 3 MVP REST API (36개 operation 구현).
+    FocusLens 백엔드 REST API (36개 operation 구현).
     기준 문서: `docs/api-spec.md`
     공통 응답: `{ success, data, error }`
     JWT Access Token만 사용하며 토큰 재발급 API는 없다.
-    AI 웹캠 측정 결과의 자동 로그 전송은 아직 연결되지 않았다.
+    보호 API는 Redis 블랙리스트 조회 실패 시 fail-closed 503을 반환한다.
+    집중도 로그는 기존 다섯 필드 요청을 유지하고 서버 산출 분 구간으로 멱등 저장한다.
+    모든 응답은 X-Request-ID 헤더를 포함한다. 목록 API의 limit 기본값은 20, 최댓값은 100이다.
   version: 1.0.0
   license:
     name: Project repository terms
@@ -74,6 +76,66 @@ components:
     AttentionState:
       type: string
       enum: [FOCUSED, NORMAL, DISTRACTED]
+
+    TimelineEntry:
+      type: object
+      required:
+        - granularity
+        - logged_at
+        - gaze_score
+        - blink_score
+        - head_score
+        - focus_score
+        - log_count
+        - focused_count
+        - normal_count
+        - distracted_count
+        - face_not_detected_count
+      properties:
+        granularity:
+          type: string
+          enum: [MINUTE, HOUR, DAY, WEEK]
+        minute_index:
+          type: integer
+          minimum: 1
+          nullable: true
+        logged_at:
+          type: string
+          format: date-time
+        gaze_score:
+          type: number
+          format: double
+        blink_score:
+          type: number
+          format: double
+        head_score:
+          type: number
+          format: double
+        focus_score:
+          type: number
+          format: double
+        attention_state:
+          type: string
+          enum: [FOCUSED, NORMAL, DISTRACTED]
+          nullable: true
+        face_detected:
+          type: boolean
+          nullable: true
+        log_count:
+          type: integer
+          minimum: 1
+        focused_count:
+          type: integer
+          minimum: 0
+        normal_count:
+          type: integer
+          minimum: 0
+        distracted_count:
+          type: integer
+          minimum: 0
+        face_not_detected_count:
+          type: integer
+          minimum: 0
 
     ShareScope:
       type: string
@@ -148,6 +210,26 @@ components:
             success: false
             data: {}
             error: 리소스를 찾을 수 없습니다
+    Response409:
+      description: Conflict — 리소스 상태 또는 고유 제약 충돌
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiResponse'
+          example:
+            success: false
+            data: {}
+            error: 요청이 현재 리소스 상태와 충돌합니다
+    Response503:
+      description: Service Unavailable — Redis 장애로 인증 상태를 확인할 수 없음
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiResponse'
+          example:
+            success: false
+            data: {}
+            error: 인증 상태를 확인할 수 없습니다
 
 paths:
   # ---------------------------------------------------------------------------
@@ -211,7 +293,6 @@ paths:
           $ref: '#/components/responses/Response403'
         '404':
           $ref: '#/components/responses/Response404'
-
   /api/auth/login:
     post:
       tags: [auth]
@@ -294,6 +375,8 @@ paths:
           $ref: '#/components/responses/Response403'
         '404':
           $ref: '#/components/responses/Response404'
+        '503':
+          $ref: '#/components/responses/Response503'
 
   # ---------------------------------------------------------------------------
   # sessions
@@ -337,6 +420,8 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -355,13 +440,15 @@ paths:
           in: query
           schema:
             type: integer
+            minimum: 1
             default: 1
         - name: limit
           in: query
           schema:
             type: integer
-            default: 20
+            minimum: 1
             maximum: 100
+            default: 20
         - name: status
           in: query
           schema:
@@ -407,6 +494,8 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -416,7 +505,7 @@ paths:
     get:
       tags: [sessions]
       summary: 세션 상세 조회
-      description: 분 단위 집중도 타임라인 포함
+      description: 원본과 시간·일·주 Roll-up 집중도 타임라인 포함
       operationId: sessionsGetById
       security:
         - BearerAuth: []
@@ -460,27 +549,13 @@ paths:
                           timeline:
                             type: array
                             items:
-                              type: object
-                              properties:
-                                logged_at:
-                                  type: string
-                                  format: date-time
-                                gaze_score:
-                                  type: number
-                                blink_score:
-                                  type: number
-                                head_score:
-                                  type: number
-                                focus_score:
-                                  type: number
-                                attention_state:
-                                  $ref: '#/components/schemas/AttentionState'
-                                face_detected:
-                                  type: boolean
+                              $ref: '#/components/schemas/TimelineEntry'
         '400':
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -491,9 +566,12 @@ paths:
       tags: [sessions]
       summary: 집중도 로그 저장
       description: |
-        분 단위 로그. gaze/blink/head/total 0~100 및 total 가중 합산값 일치 검증.
-        동일 세션의 60초 미만 재전송은 Redis로 차단하며 logged_at은 서버 수신 시각이다.
-        현재 AI 클라이언트에는 API 호출 코드가 있으나 웹캠 파이프라인과 연결되지 않았다.
+        기존 AI 클라이언트와 호환되는 다섯 필드의 분 단위 로그를 저장한다.
+        gaze/blink/head/total 0~100, 필수 face_detected, total 가중 합산값을 검증한다.
+        서버 수신 시각과 세션 시작 시각으로 minute_index를 계산하며 첫 완료 구간은 1이다.
+        (session_id, minute_index) DB UNIQUE 제약으로 동일 내용은 기존 로그를 200으로
+        반환하고 다른 내용은 409로 거부한다. logged_at은 최초 서버 수신 시각이다.
+        클라이언트 측 원래 측정 시각은 현재 요청만으로 복원할 수 없다.
       operationId: sessionsLog
       security:
         - BearerAuth: []
@@ -510,7 +588,7 @@ paths:
           application/json:
             schema:
               type: object
-              required: [gaze, blink, head, total]
+              required: [gaze, blink, head, total, face_detected]
               properties:
                 gaze:
                   type: number
@@ -534,7 +612,7 @@ paths:
                   maximum: 100
                 face_detected:
                   type: boolean
-                  description: 선택. 생략 시 백엔드가 true로 저장한다. AI의 분 단위 산출은 아직 미구현.
+                  description: 필수. false이면 gaze, blink, head, total이 모두 0이어야 한다.
       responses:
         '200':
           description: OK
@@ -551,6 +629,9 @@ paths:
                           log_id:
                             type: string
                             format: uuid
+                          minute_index:
+                            type: integer
+                            minimum: 1
                           logged_at:
                             type: string
                             format: date-time
@@ -564,16 +645,20 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
           $ref: '#/components/responses/Response404'
+        '409':
+          $ref: '#/components/responses/Response409'
 
   /api/sessions/{id}/end:
     post:
       tags: [sessions]
       summary: 세션 종료
-      description: 리포트 자동 생성
+      description: 세션 완료 변경과 리포트 생성을 하나의 Serializable 트랜잭션으로 처리
       operationId: sessionsEnd
       security:
         - BearerAuth: []
@@ -629,6 +714,8 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -641,7 +728,7 @@ paths:
     get:
       tags: [reports]
       summary: 주간 집중도 요약
-      description: 최근 7일 일별 평균 집중도
+      description: 완료 세션을 started_at UTC 날짜에 귀속해 최근 7개 날짜의 로그 가중 평균과 학습 시간을 집계
       operationId: reportsWeekly
       security:
         - BearerAuth: []
@@ -696,6 +783,8 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -705,7 +794,7 @@ paths:
     get:
       tags: [reports]
       summary: 월간 집중도 요약
-      description: 완료된 세션만 대상으로 최근 30일 일별 집중도와 학습 시간을 집계
+      description: 완료 세션을 started_at UTC 날짜에 귀속해 최근 30개 날짜의 로그 가중 평균과 학습 시간을 집계
       operationId: reportsMonthly
       security:
         - BearerAuth: []
@@ -762,6 +851,8 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
 
   /api/reports/{session_id}:
     get:
@@ -801,7 +892,7 @@ paths:
                           timeline:
                             type: array
                             items:
-                              type: object
+                              $ref: '#/components/schemas/TimelineEntry'
                           created_at:
                             type: string
                             format: date-time
@@ -809,6 +900,8 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -859,6 +952,8 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -896,6 +991,8 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -935,6 +1032,8 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -972,6 +1071,8 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -1029,6 +1130,8 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -1047,6 +1150,19 @@ paths:
           schema:
             type: boolean
             default: false
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
       responses:
         '200':
           description: OK
@@ -1072,10 +1188,21 @@ paths:
                             type: array
                             items:
                               type: object
+                          pagination:
+                            allOf:
+                              - $ref: '#/components/schemas/Pagination'
+                              - type: object
+                                properties:
+                                  pending_received_total:
+                                    type: integer
+                                  pending_sent_total:
+                                    type: integer
         '400':
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -1131,6 +1258,8 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -1204,6 +1333,8 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -1213,6 +1344,7 @@ paths:
     get:
       tags: [session-shares]
       summary: 소셜 피드 조회
+      description: ACTIVE 공유 중 연결된 세션이 COMPLETED이고 종료 시각이 있는 항목만 공개 범위와 필드별 프라이버시에 따라 반환
       operationId: sessionSharesFeed
       security:
         - BearerAuth: []
@@ -1221,11 +1353,14 @@ paths:
           in: query
           schema:
             type: integer
+            minimum: 1
             default: 1
         - name: limit
           in: query
           schema:
             type: integer
+            minimum: 1
+            maximum: 100
             default: 20
         - name: scope
           in: query
@@ -1256,6 +1391,8 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -1314,6 +1451,8 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -1358,6 +1497,8 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -1370,7 +1511,7 @@ paths:
     get:
       tags: [rankings]
       summary: 랭킹 조회
-      description: ranking_participation=false 사용자 제외. v_rankings View 기반.
+      description: ranking_participation=true 사용자의 완료 세션을 started_at UTC 날짜 기준으로 집계
       operationId: rankingsGet
       security:
         - BearerAuth: []
@@ -1447,6 +1588,8 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -1462,6 +1605,20 @@ paths:
       operationId: groupsGetMine
       security:
         - BearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
       responses:
         '200':
           description: OK
@@ -1504,8 +1661,12 @@ paths:
                                 created_at:
                                   type: string
                                   format: date-time
+                          pagination:
+                            $ref: '#/components/schemas/Pagination'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
 
     post:
       tags: [groups]
@@ -1566,6 +1727,8 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -1616,6 +1779,8 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -1675,6 +1840,8 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -1744,6 +1911,8 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -1809,6 +1978,8 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -1858,6 +2029,8 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -1867,7 +2040,7 @@ paths:
     get:
       tags: [groups]
       summary: 그룹 대시보드 조회
-      description: OWNER/MANAGER는 전체 구성원, MEMBER는 자신의 통계만 조회
+      description: OWNER/MANAGER는 전체 구성원, MEMBER는 자신의 통계만 조회. group_data_sharing=false 구성원의 완료 세션 통계는 제외
       operationId: groupsGetDashboard
       security:
         - BearerAuth: []
@@ -1878,6 +2051,19 @@ paths:
           schema:
             type: string
             format: uuid
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
       responses:
         '200':
           description: OK
@@ -1927,10 +2113,14 @@ paths:
                                   type: string
                                   format: date-time
                                   nullable: true
+                          pagination:
+                            $ref: '#/components/schemas/Pagination'
         '400':
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -2009,6 +2199,8 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -2031,6 +2223,19 @@ paths:
           in: query
           schema:
             $ref: '#/components/schemas/GoalStatus'
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
       responses:
         '200':
           description: OK
@@ -2048,10 +2253,14 @@ paths:
                             type: array
                             items:
                               type: object
+                          pagination:
+                            $ref: '#/components/schemas/Pagination'
         '400':
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -2115,6 +2324,8 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -2190,6 +2401,8 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':
@@ -2217,11 +2430,14 @@ paths:
           in: query
           schema:
             type: integer
+            minimum: 1
             default: 1
         - name: limit
           in: query
           schema:
             type: integer
+            minimum: 1
+            maximum: 100
             default: 20
       responses:
         '200':
@@ -2246,6 +2462,8 @@ paths:
           $ref: '#/components/responses/Response400'
         '401':
           $ref: '#/components/responses/Response401'
+        '503':
+          $ref: '#/components/responses/Response503'
         '403':
           $ref: '#/components/responses/Response403'
         '404':

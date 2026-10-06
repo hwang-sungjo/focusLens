@@ -4,7 +4,7 @@
 > **응답 형식**: `{ success, data, error }`  
 > **권한 원칙**: 그룹 API는 `group_members.group_role` 기준, 세션 API는 JWT `sub` = `sessions.user_id`
 
-### 구현 범위 요약 (2026-09-22)
+### 구현 범위 요약 (2026-10-06)
 
 아래는 `backend/src/routes`와 `docs/swagger.yaml`의 현행 36개 operation을 도메인별로 묶은 것이다. 세부 요청·응답은 `docs/api-spec.md`를 따른다.
 
@@ -19,7 +19,9 @@
 | 랭킹 | 전체·친구·그룹 범위의 일간/주간 집중도·학습시간 | 1 |
 | 그룹 | 그룹 생성/목록/상세, 초대·참여, 멤버 역할/내보내기, 대시보드, 목표 생성/목록/배정, 피드백 작성/조회 | 13 |
 
-이 표는 라우트 구현 범위다. AI의 1분 점수 자동 전송, 제품 프런트엔드 E2E, Roll-up과 배포 검증은 `docs/backend-plan.md` Phase 4·5에 남아 있다.
+이 표는 라우트 구현 범위다. 백엔드 Roll-up과 성능·운영 안정성 작업은 Phase 4-4·4-5에서 완료했으며, AI의 1분 점수 자동 전송, 제품 프런트엔드 E2E, 배포 검증은 외부 연동 또는 Phase 5에 남아 있다.
+
+목록 조회는 기본 20건, 최대 100건으로 제한한다. 세션·피드·친구·그룹·목표·피드백은 생성 시각 또는 참여 시각 뒤에 `id`를 정렬 키로 추가해 페이지 순서를 고정한다. 그룹 대시보드는 요청 페이지의 멤버만 집계하며 랭킹은 상위 50명과 요청자 본인만 반환한다. 모든 HTTP 응답에는 추적용 `X-Request-ID`가 포함된다.
 
 ---
 
@@ -57,13 +59,13 @@
 | **행위 주체** | 인증된 사용자 |
 | **사전 조건** | 유효한 JWT Access Token (`Authorization: Bearer`) |
 | **처리 흐름** | 1. `POST /api/auth/logout` — JWT 미들웨어 검증<br>2. 토큰 해시로 Redis 키 `blacklist:{sha256(token)}` 생성<br>3. TTL = JWT `exp`까지 남은 초로 SET<br>4. `200` + `"로그아웃되었습니다"` 반환<br>5. 이후 동일 토큰 요청 시 미들웨어에서 **401** |
-| **예외 처리** | 토큰 없음 → **401**<br>만료·무효 토큰 → **401**<br>Redis 장애 → **500** (토큰 무효화 실패 로그) |
+| **예외 처리** | 토큰 없음 → **401**<br>만료·무효·로그아웃 토큰 → **401**<br>Redis 블랙리스트 조회·등록 장애 → **503** (인증 상태 확인 실패, fail-closed) |
 
 ---
 
 ## 2. 학습 세션 (Sessions)
 
-> ERD: `sessions`에 `avg_focus_score`, `duration_seconds` 저장 금지 — 조회·리포트 시 `concentration_logs`에서 계산
+> ERD: `sessions`에 `avg_focus_score`, `duration_seconds` 저장 금지 — 조회·리포트 시 원본과 Roll-up tier에서 계산
 
 ### 2.1 세션 시작
 
@@ -84,8 +86,8 @@
 | **기능명** | 분 단위 집중도 로그 저장 |
 | **행위 주체** | 세션 소유자 (인증된 사용자) |
 | **사전 조건** | JWT 유효. `sessions.id = :id` 존재. `sessions.user_id = JWT sub`. `sessions.status = IN_PROGRESS` |
-| **처리 흐름** | 1. `POST /api/sessions/:id/log` — `{ gaze, blink, head, total, face_detected? }` 수신<br>2. 라우트에서 각 점수의 숫자·유한성·0~100 범위와 선택적 `face_detected`의 boolean 타입 검증<br>3. 컨트롤러에서 `sessions.user_id = JWT sub`, 진행 중 상태 검증<br>4. 서버에서 `total`이 0.4/0.3/0.3 가중 합산값과 일치하는지 검증<br>5. Redis `SET NX`로 동일 세션의 60초 미만 재전송 차단<br>6. 서버 수신 시각을 `logged_at`으로 저장하고, 계산한 `focus_score`로 `attention_state` 판별 (≥70 FOCUSED, 40~69 NORMAL, <40 DISTRACTED)<br>7. `concentration_logs` INSERT<br>8. `200` + `log_id`, `logged_at`, `focus_score`, `attention_state`, `face_detected` 반환. `face_detected` 미전송 시 현재 기본값은 `true` |
-| **예외 처리** | 점수·`face_detected` 형식 오류 또는 `total` 불일치 → **400**<br>60초 미만 중복 전송 → **400** `"1분 미만 중복 로그 전송입니다"`<br>JWT 없음 → **401**<br>소유자 불일치 → **403**<br>세션 없음 → **404**<br>종료된 세션 → **409** |
+| **처리 흐름** | 1. `POST /api/sessions/:id/log` — `{ gaze, blink, head, total, face_detected }` 수신<br>2. 라우트에서 각 점수의 숫자·유한성·0~100 범위와 필수 `face_detected`의 boolean 타입 검증<br>3. 컨트롤러에서 얼굴 미검출 0점 규칙, `sessions.user_id = JWT sub`, 진행 중 상태 검증<br>4. 세부 점수를 소수 둘째 자리로 정규화하고 서버에서 `total`을 다시 계산<br>5. 세션 시작 시각과 서버 수신 시각으로 `minute_index` 계산. 첫 60초 미완료 시 400<br>6. Serializable 트랜잭션에서 `(session_id, minute_index)` 기존 로그 조회<br>7. 동일 내용은 기존 로그 반환, 다른 내용은 409, 새 구간은 서버 수신 시각을 `logged_at`으로 INSERT<br>8. `200` + `log_id`, `minute_index`, `logged_at`, `focus_score`, `attention_state`, `face_detected` 반환 |
+| **예외 처리** | 점수·`face_detected` 형식, 얼굴 미검출 0점 규칙 또는 `total` 불일치 → **400**<br>첫 60초 미완료 → **400**<br>JWT 없음 → **401**<br>소유자 불일치 → **403**<br>세션 없음 → **404**<br>같은 구간의 다른 내용 또는 종료된 세션 → **409** |
 
 ---
 
@@ -96,7 +98,7 @@
 | **기능명** | 학습 세션 종료 및 리포트 생성 |
 | **행위 주체** | 세션 소유자 |
 | **사전 조건** | JWT 유효. `sessions.status = IN_PROGRESS`. `sessions.user_id = JWT sub` |
-| **처리 흐름** | 1. `POST /api/sessions/:id/end` 요청<br>2. 소유자 검증 후 `sessions` UPDATE (`ended_at=NOW()`, `status=COMPLETED`)<br>3. `concentration_logs` 집계 → gaze/blink/head/focus 평균, duration(`ended_at-started_at`), 상태별 분 수<br>4. `reports` INSERT (`session_id` UNIQUE, `summary_json`에 통계 저장)<br>5. `200` + `session_id`, `report_id`, `summary` 반환 |
+| **처리 흐름** | 1. `POST /api/sessions/:id/end` 요청<br>2. Serializable 트랜잭션에서 소유자·진행 상태 확인<br>3. `concentration_logs` 집계 → gaze/blink/head/focus 평균, duration(`ended_at-started_at`), 상태별 분 수. 얼굴 미검출 0점도 포함<br>4. 같은 트랜잭션에서 `sessions`를 `COMPLETED`로 변경하고 `reports` INSERT<br>5. 어느 한 단계라도 실패하면 모두 롤백<br>6. `200` + `session_id`, `report_id`, `summary` 반환 |
 | **예외 처리** | JWT 없음 → **401**<br>소유자 불일치 → **403**<br>세션 없음 → **404**<br>이미 종료 → **409**<br>리포트 생성 실패 → **500** (세션 상태 롤백) |
 
 ---
@@ -105,7 +107,7 @@
 
 `ai/`는 Python 3.11·OpenCV·MediaPipe Face Landmarker를 사용하는 로컬 실행 프로그램이다. 현재 약 10 FPS로 웹캠 프레임을 추론하며, 얼굴 검출 여부, 양쪽 홍채의 눈 내부 상대 위치(`gaze_x`, `gaze_y`), 양쪽 blink blendshape와 단일 프레임 눈 감김, 변환 행렬의 `yaw/pitch/roll`을 추출한다. 실시간 디버그 화면과 프레임별 JSON 출력을 제공한다. 가중 합산 `total` 함수와 JWT를 사용하는 로그 API 클라이언트도 각각 구현돼 있다.
 
-사용자별 gaze/head 보정, blink 이벤트·장시간 눈 감김 판정, 1분 버퍼와 `gaze/blink/head` 점수 집계, 얼굴 검출 비율 기반 분 단위 `face_detected`, 실패 재전송 큐는 아직 구현되지 않았다. 웹캠 파이프라인은 API 클라이언트를 호출하지 않으므로 실제 세션 로그의 자동 전송도 아직 동작하지 않는다. 진행 상태는 `docs/backend-plan.md`의 AI 현황표와 이 절을 기준으로 하고, `ai/README.md`와 `ai/FocusLens_focus_log_implementation_plan.md`는 구현·후속 설계 자료로 참조한다.
+AI 실행 프로그램은 백엔드 작업 범위 밖의 외부 클라이언트로 취급한다. 현재 백엔드는 기존 AI API 클라이언트의 다섯 필드 요청을 변경하지 않고 수신하며, 실제 카메라 측정·집계·재전송 검증은 `docs/backend-plan.md`의 외부 연동 대기 항목으로 관리한다.
 
 ---
 
@@ -118,7 +120,7 @@
 | **기능명** | 세션별 집중도 리포트 조회 |
 | **행위 주체** | 세션 소유자 |
 | **사전 조건** | JWT 유효. `sessions.status = COMPLETED`. `reports` 레코드 존재. `sessions.user_id = JWT sub` |
-| **처리 흐름** | 1. `GET /api/reports/:session_id` 요청<br>2. `sessions` + `reports` JOIN, 소유자 검증<br>3. `reports.summary_json` 반환<br>4. `concentration_logs` 타임라인 조회 (분 단위 gaze/blink/head/focus, `attention_state`)<br>5. `200` + `report_id`, `summary_json`, `timeline`, `created_at` |
+| **처리 흐름** | 1. `GET /api/reports/:session_id` 요청<br>2. `sessions` + `reports` JOIN, 소유자 검증<br>3. `reports.summary_json` 반환<br>4. 원본과 시간·일·주 Roll-up 타임라인 조회. 각 행은 `granularity`, 점수, `log_count`, 상태별 건수를 포함<br>5. `200` + `report_id`, `summary_json`, `timeline`, `created_at` |
 | **예외 처리** | JWT 없음 → **401**<br>소유자 불일치 → **403**<br>세션 없음 → **404**<br>리포트 미생성(미종료 세션) → **404** `"리포트가 아직 생성되지 않았습니다"` |
 
 ---
@@ -130,7 +132,7 @@
 | **기능명** | 주간 집중도 요약 조회 |
 | **행위 주체** | 인증된 사용자 (본인 데이터) |
 | **사전 조건** | JWT 유효 |
-| **처리 흐름** | 1. `GET /api/reports/weekly` — 선택 `end_date` (기본 오늘)<br>2. 기준일 포함 최근 7일 범위 산출<br>3. JWT `sub` 사용자의 `COMPLETED` 세션 + `concentration_logs` 집계<br>4. 일별 `session_count`, `total_study_seconds`, `avg_focus_score` 계산<br>5. 주간 평균 집중도·총 학습 시간 합산<br>6. `200` + `period`, `daily_summaries`, `weekly_avg_focus_score`, `weekly_total_study_seconds` |
+| **처리 흐름** | 1. `GET /api/reports/weekly` — 선택 `end_date` (기본 오늘)<br>2. 기준일 포함 최근 7개 UTC 날짜 범위 산출<br>3. JWT `sub` 사용자의 `COMPLETED` 세션과 `v_session_metric_totals` 집계<br>4. 세션 `started_at` UTC 날짜에 해당 세션의 수치·시간·건수를 함께 배정<br>5. 로그 수 가중 평균 집중도와 총 학습 시간 계산<br>6. `200` + `period`, `daily_summaries`, `weekly_avg_focus_score`, `weekly_total_study_seconds` |
 | **예외 처리** | JWT 없음 → **401**<br>`end_date` 형식 오류 → **400**<br>해당 기간 세션 없음 → **200** (7개 날짜의 `daily_summaries`, 각 `session_count=0`, `total_study_seconds=0`, `avg_focus_score=null`; `weekly_avg_focus_score=null`) |
 
 ---
@@ -168,7 +170,7 @@
 | **기능명** | 세션 공유 피드 조회 |
 | **행위 주체** | 인증된 사용자 (조회자) |
 | **사전 조건** | JWT 유효 |
-| **처리 흐름** | 1. `GET /api/session-shares/feed` — `page`, `limit`, `scope` (all/friends/public)<br>2. `session_shares` WHERE `deleted_at IS NULL`, `status=ACTIVE`<br>3. 조회자 접근 가능 scope 필터: PUBLIC 전체 / FRIENDS는 `user_connections` / GROUP은 공통 `group_members`<br>4. 세션 소유자 `user_privacy_settings.default_session_scope` 이하 share만 노출<br>5. `score_visibility`, `study_time_visibility`에 따라 `session_summary` 마스킹<br>6. `v_session_share_reaction_counts`로 공감 수 집계<br>7. `200` + `feed[]`, `pagination` |
+| **처리 흐름** | 1. `GET /api/session-shares/feed` — `page`, `limit`, `scope` (all/friends/public)<br>2. `session_shares` ACTIVE·미삭제이며 연결된 세션이 `COMPLETED`·종료 시각 존재인지 확인<br>3. 조회자 접근 가능 scope 필터: PUBLIC 전체 / FRIENDS는 `user_connections` / GROUP은 공통 `group_members`<br>4. 세션 소유자 `user_privacy_settings.default_session_scope` 이하 share만 노출<br>5. `score_visibility`, `study_time_visibility`에 따라 `session_summary` 마스킹<br>6. `v_session_share_reaction_counts`로 공감 수 집계<br>7. `200` + `feed[]`, `pagination` |
 | **예외 처리** | JWT 없음 → **401**<br>잘못된 scope → **400**<br>결과 없음 → **200** (빈 feed) |
 
 ---
@@ -192,7 +194,7 @@
 | **기능명** | 집중도·학습 시간 랭킹 조회 |
 | **행위 주체** | 인증된 사용자 |
 | **사전 조건** | JWT 유효. `scope`, `period`, `metric` 필수. `scope=group` 시 `group_id` + `group_members` ACTIVE |
-| **처리 흐름** | 1. `GET /api/rankings?scope&period&metric&group_id`<br>2. `v_rankings` View 조회 — `ranking_participation=true` 사용자만 포함<br>3. scope 필터: global / friends(`user_connections`) / group(`group_members`)<br>4. period: daily / weekly, metric: focus_score / study_time<br>5. 순위·값·session_count 산출, 요청자 `my_rank` 포함<br>6. `200` + `rankings[]`, `my_rank` |
+| **처리 흐름** | 1. `GET /api/rankings?scope&period&metric&group_id`<br>2. `v_rankings` View 조회 — `COMPLETED` 세션, UTC 시작일, `ranking_participation=true` 사용자만 포함<br>3. scope 필터: global / friends(`user_connections`) / group(`group_members`)<br>4. period: daily / weekly, metric: focus_score / study_time<br>5. 로그 가중 평균·순위·session_count 산출, 요청자 `my_rank` 포함<br>6. `200` + `rankings[]`, `my_rank` |
 | **예외 처리** | 필수 파라미터 누락 → **400**<br>JWT 없음 → **401**<br>group scope 비구성원 → **403**<br>group 없음 → **404** |
 
 ---
@@ -209,7 +211,7 @@
 | **행위 주체** | 세션 소유자 |
 | **사전 조건** | JWT 유효. `sessions.user_id = sub`. `sessions.status = COMPLETED`. 동일 `(session_id, share_scope, group_id)` 중복 없음 |
 | **처리 흐름** | 1. `POST /api/session-shares` — `session_id`, `share_scope`, `group_id`, `share_message`<br>2. 세션 소유자 검증<br>3. **공개 범위 제어** (5.2) — `share_scope` ≤ `default_session_scope`<br>4. `share_scope=GROUP` → `group_id` 필수 + 요청자 `group_members` ACTIVE 확인<br>5. `session_shares` INSERT (`status=ACTIVE`)<br>6. `201` + `share_id`, scope, `created_at` |
-| **예외 처리** | 필수 필드 누락 → **400**<br>GROUP scope에 group_id 없음 → **400**<br>JWT 없음 → **401**<br>세션 소유자 아님 → **403**<br>프라이버시 초과 공개 → **403**<br>그룹 비구성원 → **403**<br>세션 없음 → **404**<br>동일 scope 중복 → **409**<br>진행 중 세션 공유 → **409** |
+| **예외 처리** | 필수 필드 누락 → **400**<br>GROUP scope에 group_id 없음 → **400**<br>JWT 없음 → **401**<br>세션 소유자 아님 → **403**<br>프라이버시 초과 공개 → **403**<br>그룹 비구성원 → **403**<br>세션 없음 → **404**<br>동일 scope 중복 → **409**<br>완료 상태 또는 종료 시각이 없는 세션 공유 → **409** |
 
 ---
 
@@ -294,8 +296,8 @@
 | 도메인 | 주요 API | ERD 테이블 |
 | --- | --- | --- |
 | 인증 | `/api/auth/*` | `users`, `user_profiles`, `user_privacy_settings` |
-| 학습 세션 | `/api/sessions/*` | `sessions`, `concentration_logs` |
-| 리포트 | `/api/reports/*` | `reports`, `concentration_logs`, `sessions` |
+| 학습 세션 | `/api/sessions/*` | `sessions`, `concentration_logs`, `hourly_stats`, `daily_stats`, `weekly_stats` |
+| 리포트 | `/api/reports/*` | `reports`, `sessions`, `v_session_metric_totals` |
 | 소셜 | `/api/connections/*`, `/api/rankings` | `user_connection_requests`, `user_connections` |
 | 세션 공유 | `/api/session-shares/*` | `session_shares`, `session_reactions`, `user_privacy_settings` |
 | 그룹 | `/api/groups/*` | `groups`, `group_members`, `group_invitations`, `group_goals`, `group_goal_assignees`, `manager_feedbacks` |

@@ -126,7 +126,11 @@ const logout = async (req, res, next) => {
       error: '',
     });
   } catch (err) {
-    next(err);
+    return res.status(503).json({
+      success: false,
+      data: {},
+      error: '인증 상태를 확인할 수 없습니다.',
+    });
   }
 };
 

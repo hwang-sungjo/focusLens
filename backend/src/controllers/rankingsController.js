@@ -59,29 +59,43 @@ const getRankings = async (req, res, next) => {
     const scopeFilter = scopeUserIds
       ? Prisma.sql`AND user_id IN (${Prisma.join(scopeUserIds)})`
       : Prisma.empty;
+    const metricExpression = metric === 'focus_score'
+      ? Prisma.sql`avg_focus_score`
+      : Prisma.sql`total_study_seconds::DOUBLE PRECISION`;
 
     const rows = await prisma.$queryRaw(
       Prisma.sql`
-        SELECT
-          user_id,
-          nickname,
-          profile_image_url,
-          CASE
-            WHEN SUM(focus_log_count) > 0
-            THEN ROUND(SUM(focus_score_sum) / SUM(focus_log_count), 2)::DOUBLE PRECISION
-            ELSE NULL
-          END AS avg_focus_score,
-          SUM(total_study_seconds)::INT AS total_study_seconds,
-          SUM(session_count)::INT AS session_count
-        FROM v_rankings
-        WHERE activity_date >= CAST(${periodStart} AS DATE)
-        ${scopeFilter}
-        GROUP BY user_id, nickname, profile_image_url
+        WITH aggregated AS (
+          SELECT
+            user_id,
+            nickname,
+            profile_image_url,
+            CASE
+              WHEN SUM(focus_log_count) > 0
+              THEN ROUND(SUM(focus_score_sum) / SUM(focus_log_count), 2)::DOUBLE PRECISION
+              ELSE NULL
+            END AS avg_focus_score,
+            SUM(total_study_seconds)::INT AS total_study_seconds,
+            SUM(session_count)::INT AS session_count
+          FROM v_rankings
+          WHERE activity_date >= CAST(${periodStart} AS DATE)
+          ${scopeFilter}
+          GROUP BY user_id, nickname, profile_image_url
+        ), ranked AS (
+          SELECT *,
+            ROW_NUMBER() OVER (ORDER BY ${metricExpression} DESC NULLS LAST, user_id ASC)::INT AS rank
+          FROM aggregated
+          WHERE ${metricExpression} IS NOT NULL
+        )
+        SELECT * FROM ranked
+        WHERE rank <= 50 OR user_id = ${viewerId}
+        ORDER BY rank ASC
       `,
     );
 
     const rankedRows = rows
       .map((row) => ({
+        rank: Number(row.rank),
         user_id: row.user_id,
         nickname: row.nickname,
         profile_image_url: row.profile_image_url,
@@ -93,9 +107,7 @@ const getRankings = async (req, res, next) => {
             : Number(row.total_study_seconds),
         session_count: Number(row.session_count),
       }))
-      .filter((row) => row.value !== null)
-      .sort((left, right) => right.value - left.value || left.user_id.localeCompare(right.user_id))
-      .map((row, index) => ({ rank: index + 1, ...row }));
+      .filter((row) => row.value !== null);
 
     const myRanking = rankedRows.find((row) => row.user_id === viewerId);
 

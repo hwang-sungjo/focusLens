@@ -79,6 +79,9 @@ sequenceDiagram
   alt 블랙리스트 등록됨
     R-->>M: blocked
     M-->>C: 401 Unauthorized
+  else Redis 조회 실패
+    R--xM: unavailable
+    M-->>C: 503 Service Unavailable
   else 유효한 토큰
     R-->>M: not blocked
     M->>P: req.user = { sub, email, role }
@@ -142,7 +145,7 @@ sequenceDiagram
 
 ### 4.3 JWT 미들웨어 검증
 
-미들웨어는 아래 순서로 검증한다. **하나라도 실패하면 401**을 반환하고 컨트롤러까지 진행하지 않는다.
+미들웨어는 아래 순서로 검증한다. 토큰 자체가 실패하면 401, Redis 블랙리스트 조회가 실패하면 fail-closed 503을 반환하고 컨트롤러까지 진행하지 않는다.
 
 ```
 1. Authorization 헤더 존재 여부
@@ -170,6 +173,18 @@ sequenceDiagram
 }
 ```
 
+**Redis 장애 응답 `503`**
+
+```json
+{
+  "success": false,
+  "data": {},
+  "error": "인증 상태를 확인할 수 없습니다."
+}
+```
+
+Redis 장애 중에는 로그아웃 여부를 판정할 수 있으므로 유효한 JWT도 보호 라우트에 통과시키지 않는다.
+
 ---
 
 ### 4.4 리소스 소유자 검증 (401 vs 403)
@@ -190,7 +205,7 @@ JWT sub → sessions.id = :id 조회 → sessions.user_id === sub ?
   NO  → 403 "해당 세션에 대한 권한이 없습니다"
 ```
 
-현재 `ai/`에는 JWT를 전달받아 위 로그 API를 호출하는 Python 클라이언트 코드가 있다. 다만 웹캠 측정 루프와 연결되지 않았으며 자동 로그인·토큰 갱신도 구현되지 않았다. 실제 AI 측 자동 전송의 인증 흐름은 `docs/backend-plan.md` Phase 4 통합 검증 대상으로 남아 있다.
+현재 `ai/`에는 JWT를 전달받아 위 로그 API를 호출하는 Python 클라이언트 코드가 있다. 다만 웹캠 측정 루프와 연결되지 않았으며 자동 로그인·토큰 갱신도 구현되지 않았다. 백엔드는 고정 HTTP 요청으로 인증·권한 통합 검증을 완료했으며 실제 AI 측 자동 전송은 `docs/backend-plan.md`의 외부 연동 대기 항목이다.
 
 ---
 
@@ -222,6 +237,8 @@ sequenceDiagram
 | 2 | 토큰 문자열(또는 jti)의 해시로 Redis 키 생성: `blacklist:{sha256(token)}` |
 | 3 | TTL = `exp - now` (남은 만료 시간). 이미 만료된 토큰은 등록 생략 가능 |
 | 4 | 이후 동일 토큰으로 요청 시 미들웨어 4단계에서 **401** 반환 |
+
+Redis 조회나 로그아웃 토큰 등록이 실패하면 503을 반환한다. 로그아웃 상태를 확인하거나 기록하지 못한 요청을 성공으로 처리하지 않는다.
 
 ### Redis 키 설계
 
