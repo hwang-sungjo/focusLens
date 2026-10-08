@@ -1,14 +1,11 @@
 // src/controllers/reportsController.js
 const prisma = require('../models/prismaClient');
-const { calcSessionAvgScore } = require('../utils/focusScore');
+const { calculateDurationSeconds } = require('../utils/sessionMetrics');
+const { getSessionMetricMap, getSessionTimeline } = require('../services/sessionStats');
 const { createError } = require('../middleware/errorHandler');
 
 const toDateKey = (date) => date.toISOString().slice(0, 10);
-
-const durationSeconds = (session) => {
-  if (!session.ended_at) return 0;
-  return Math.max(0, Math.floor((session.ended_at.getTime() - session.started_at.getTime()) / 1000));
-};
+const weightedAverage = (sum, count) => (count > 0 ? Math.round((sum / count) * 100) / 100 : null);
 
 const parseEndDate = (value) => {
   if (!value) return new Date();
@@ -29,51 +26,55 @@ const buildPeriodReport = async (userId, endDateValue, days) => {
     where: {
       user_id: userId,
       status: 'COMPLETED',
+      ended_at: { not: null },
       started_at: { gte: start, lte: end },
     },
-    include: {
-      concentration_logs: {
-        where: { logged_at: { gte: start, lte: end } },
-        select: { focus_score: true, logged_at: true },
-      },
-    },
   });
+  const metricMap = await getSessionMetricMap(sessions.map((session) => session.id));
 
   const buckets = new Map();
   for (let offset = 0; offset < days; offset += 1) {
     const date = new Date(start);
     date.setUTCDate(start.getUTCDate() + offset);
-    buckets.set(toDateKey(date), { scores: [], session_count: 0, total_study_seconds: 0 });
+    buckets.set(toDateKey(date), {
+      focus_score_sum: 0,
+      log_count: 0,
+      session_count: 0,
+      total_study_seconds: 0,
+    });
   }
 
   for (const session of sessions) {
     const sessionBucket = buckets.get(toDateKey(session.started_at));
     if (sessionBucket) {
       sessionBucket.session_count += 1;
-      sessionBucket.total_study_seconds += durationSeconds(session);
-    }
-
-    for (const log of session.concentration_logs) {
-      const logBucket = buckets.get(toDateKey(log.logged_at));
-      if (logBucket) logBucket.scores.push(log.focus_score);
+      sessionBucket.total_study_seconds += calculateDurationSeconds(
+        session.started_at,
+        session.ended_at,
+      ) ?? 0;
+      const metric = metricMap.get(session.id);
+      sessionBucket.focus_score_sum += metric?.focus_score_sum ?? 0;
+      sessionBucket.log_count += metric?.log_count ?? 0;
     }
   }
 
-  const allScores = [];
+  let totalFocusScoreSum = 0;
+  let totalLogCount = 0;
   const dailySummaries = Array.from(buckets, ([date, bucket]) => {
-    allScores.push(...bucket.scores);
+    totalFocusScoreSum += bucket.focus_score_sum;
+    totalLogCount += bucket.log_count;
     return {
       date,
       session_count: bucket.session_count,
       total_study_seconds: bucket.total_study_seconds,
-      avg_focus_score: calcSessionAvgScore(bucket.scores.map((focus_score) => ({ focus_score }))),
+      avg_focus_score: weightedAverage(bucket.focus_score_sum, bucket.log_count),
     };
   });
 
   return {
     period: { start_date: toDateKey(start), end_date: toDateKey(end) },
     daily_summaries: dailySummaries,
-    avg_focus_score: calcSessionAvgScore(allScores.map((focus_score) => ({ focus_score }))),
+    avg_focus_score: weightedAverage(totalFocusScoreSum, totalLogCount),
     total_study_seconds: dailySummaries.reduce((sum, day) => sum + day.total_study_seconds, 0),
   };
 };
@@ -88,23 +89,16 @@ const getReport = async (req, res, next) => {
       where: { id: session_id },
       include: {
         report: true,
-        concentration_logs: {
-          orderBy: { logged_at: 'asc' },
-          select: {
-            logged_at: true,
-            gaze_score: true,
-            blink_score: true,
-            head_score: true,
-            focus_score: true,
-            attention_state: true,
-          },
-        },
       },
     });
 
     if (!session) return next(createError('세션을 찾을 수 없습니다.', 404));
     if (session.user_id !== userId) return next(createError('리포트에 대한 권한이 없습니다.', 403));
-    if (!session.report) return next(createError('리포트가 아직 생성되지 않았습니다.', 404));
+    if (session.status !== 'COMPLETED' || !session.ended_at || !session.report) {
+      return next(createError('리포트가 아직 생성되지 않았습니다.', 404));
+    }
+
+    const timeline = await getSessionTimeline(session_id);
 
     return res.status(200).json({
       success: true,
@@ -112,7 +106,7 @@ const getReport = async (req, res, next) => {
         report_id: session.report.id,
         session_id: session.id,
         summary_json: session.report.summary_json,
-        timeline: session.concentration_logs,
+        timeline,
         created_at: session.report.created_at,
       },
       error: '',

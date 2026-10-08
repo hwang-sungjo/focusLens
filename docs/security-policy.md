@@ -2,9 +2,9 @@
 
 > **기준 문서**: `docs/erd.md`, `docs/api-spec.md`, `docs/auth-flow.md`  
 > **응답 형식**: `{ success: false, data: {}, error: "..." }`
-> **공통 원칙**: 검증 실패 시 **400 / 403** 응답. 구조화된 실패 로그(user_id, path, reason)는 Phase 4 점검 대상
+> **공통 원칙**: 실패 원인에 따라 **400 / 401 / 403 / 404 / 409 / 503**을 구분한다. Phase 4-5에서 요청 ID 기반 구조화 로그와 실패 카운터를 구현했다.
 
-> **현재 로그 API 구현**: `backend/src/routes/sessions.js`에서 점수와 선택적 `face_detected`를 검증하고, `backend/src/controllers/sessionsController.js`에서 소유권·가중 합산값·Redis 60초 제한을 확인한다. `ai/`의 실시간 측정은 아직 이 API에 연결되지 않았다. ①·③은 현행 동작을 기술하며, 다른 절의 파일별 예시는 향후 분리 가능한 설계안이다.
+> **현재 로그 API 구현**: v1 `backend/src/routes/sessions.js`와 v2 `backend/src/routes/v2Sessions.js`에서 점수와 필수 `face_detected`를 검증한다. `backend/src/controllers/sessionsController.js`는 소유권·세션 상태·가중 합산값·얼굴 미검출 0점 규칙을 검사한다. v1은 서버 수신 시각, v2는 `measured_at`으로 분 구간을 계산해 DB UNIQUE 제약과 Serializable 트랜잭션으로 멱등 저장한다.
 
 ---
 
@@ -12,12 +12,19 @@
 
 | # | 검증 항목 | 주요 대상 API | 실패 코드 |
 | --- | --- | --- | --- |
-| ① | gaze/blink/head/total: 0~100 float | `POST /api/sessions/:id/log` | **400** |
+| ① | gaze/blink/head/total: 0~100 float | v1·v2 로그 API | **400** |
 | ② | session_id 소유자 = JWT `sub` | 세션·리포트·로그 API | **403** |
-| ③ | 1분 미만 중복 전송 차단 | `POST /api/sessions/:id/log` | **400** |
+| ③ | 분 구간·client ID 멱등 저장과 내용 충돌 차단 | v1·v2 로그 API | **409** |
 | ④ | HTTPS 전송 강제 | 전체 API (배포 환경) | **301** / 연결 거부 |
 | ⑤ | `group_members.group_role` 권한 | 그룹 API 전반 | **403** |
 | ⑥ | `default_session_scope` 초과 공개 차단 | `POST /api/session-shares`, `GET /api/session-shares/feed` | **403** |
+
+### JWT와 Redis 장애 정책
+
+- 보호 라우트는 Bearer JWT의 서명과 만료를 검증한 뒤 Redis 블랙리스트를 조회한다.
+- 토큰 없음·만료·변조·로그아웃 토큰은 401을 반환한다.
+- Redis에서 로그아웃 여부를 확인할 수 없으면 요청을 통과시키지 않고 503 `"인증 상태를 확인할 수 없습니다."`를 반환한다.
+- 알 수 없는 서버 오류의 응답에는 실행 환경과 관계없이 내부 예외 메시지, 스택, SQL, 토큰, 비밀번호 해시를 넣지 않는다.
 
 ---
 
@@ -27,18 +34,19 @@
 요청
   → [④ HTTPS] (배포 시 인프라 구성)
   → [auth] JWT 검증 (401)
-  → [sessions route] ① 점수·face_detected 검증 (400) — 로그 라우트
-  → [sessions controller] ② 소유자·상태·total 검증 (403/409/400)
-  → [Redis] ③ 세션별 60초 중복 전송 차단 (400)
-  → [controller] DB 저장 및 응답
+  → [sessions/v2Sessions route] ① 점수·face_detected·v2 식별자 검증 (400)
+  → [sessions controller] ② 소유자·상태·total·미검출 0점 검증 (403/409/400)
+  → [sessions controller] v1 수신 시각 또는 v2 measured_at으로 minute_index 계산 (400)
+  → [PostgreSQL] ③ 분 구간·client ID UNIQUE와 Serializable 트랜잭션
+  → [controller] 동일 내용 200 / 다른 내용 409
 ```
 
 | 레이어 | 현재 파일 | 담당 정책 |
 | --- | --- | --- |
 | 미들웨어 | `backend/src/middleware/auth.js` | JWT (선행 조건) |
-| 라우트 | `backend/src/routes/sessions.js` | ① 점수·`face_detected` 형식 |
-| 컨트롤러 | `backend/src/controllers/sessionsController.js` | ② 소유권, ① `total` 일치, ③ 잠금 호출 |
-| 서비스 | `backend/src/services/redis.js` | ③ 60초 중복 전송 차단 |
+| 라우트 | `backend/src/routes/sessions.js`, `v2Sessions.js` | ① 점수·`face_detected`, v2 ID·시각 형식 |
+| 컨트롤러 | `backend/src/controllers/sessionsController.js` | ② 소유권·상태, ① 점수 규칙, ③ 분 구간 계산·멱등 판정 |
+| 데이터베이스 | `concentration_logs` UNIQUE 제약 | ③ 동시 요청을 포함한 구간·client ID당 한 행 보장 |
 
 ④ HTTPS 배포 구성과 ⑤·⑥ 정책은 각 절 및 `docs/backend-plan.md`의 별도 구현·검증 범위를 따른다.
 
@@ -53,15 +61,15 @@ ERD: `concentration_logs` — `gaze_score`, `blink_score`, `head_score`, `focus_
 | 항목 | 내용 |
 | --- | --- |
 | **검증 위치** | `backend/src/routes/sessions.js` 입력 검증 + `backend/src/controllers/sessionsController.js`의 가중 합산값 확인 |
-| **적용 라우트** | `POST /api/sessions/:id/log` |
+| **적용 라우트** | `POST /api/sessions/:id/log`, `POST /api/v2/sessions/:id/log` |
 | **실패 응답** | **400** — `"gaze, blink, head, total은 0~100 범위의 float여야 합니다"` |
 
 **현행 구현**
 
 1. `gaze`, `blink`, `head`, `total` 각각 `number`, 유한값, 0~100 범위를 확인한다. 문자열 숫자는 거부한다.
-2. `face_detected`는 선택적 boolean이며 생략 시 현재 컨트롤러는 `true`로 저장한다.
-3. 서버가 0.4/0.3/0.3 가중 합산값을 계산하고 요청의 `total`과 차이가 0.01을 넘으면 400을 반환한다. DB에는 서버 계산값을 저장한다.
-4. AI 측 1분 점수·분 단위 `face_detected` 산출은 아직 미구현이므로 실제 자동 전송 검증은 후속 통합 작업이다.
+2. `face_detected`는 필수 boolean이다. `false`이면 네 점수가 모두 정확히 0이어야 한다.
+3. 서버는 세부 점수를 소수 둘째 자리로 정규화한 뒤 0.4/0.3/0.3 가중 합산값을 계산한다.
+4. 요청의 `total`과 계산값 차이가 0.01을 넘으면 400을 반환하고 DB에는 서버 계산값을 저장한다.
 
 ---
 
@@ -72,7 +80,7 @@ ERD: `sessions.user_id`(FK) — 세션 소유자. JWT `sub` = `users.id`.
 | 항목 | 내용 |
 | --- | --- |
 | **검증 위치** | `backend/src/controllers/sessionsController.js`, `reportsController.js`, `sessionSharesController.js` |
-| **적용 라우트** | `POST /api/sessions/:id/log`, `POST /api/sessions/:id/end`, `GET /api/sessions/:id`, `GET /api/reports/:session_id`, `POST /api/session-shares` (body `session_id`) |
+| **적용 라우트** | v1·v2 로그, `POST /api/sessions/:id/end`, `GET /api/sessions/:id`, `GET /api/reports/:session_id`, `POST /api/session-shares` (body `session_id`) |
 | **실패 응답** | **403** — `"해당 세션에 대한 권한이 없습니다"` |
 | **세션 없음** | **404** — `"세션을 찾을 수 없습니다"` |
 
@@ -86,22 +94,28 @@ ERD: `sessions.user_id`(FK) — 세션 소유자. JWT `sub` = `users.id`.
 
 ---
 
-### ③ 1분 미만 중복 전송 차단
+### ③ 분 구간 멱등 저장과 내용 충돌 차단
 
-ERD: `concentration_logs` — **UNIQUE(`session_id`, `logged_at`)**
+ERD: `concentration_logs` — **UNIQUE(`session_id`, `minute_index`)**, **UNIQUE(`session_id`, `client_log_id`)**
 
 | 항목 | 내용 |
 | --- | --- |
-| **검증 위치** | `backend/src/services/redis.js`의 `SET NX` 잠금 + 세션 컨트롤러 |
-| **적용 라우트** | `POST /api/sessions/:id/log` |
-| **실패 응답** | **400** — `"1분 미만 중복 로그 전송입니다"` |
-| **DB 제약** | `(session_id, logged_at)` UNIQUE는 존재하지만 현재 중복 요청의 주된 차단 수단은 Redis 60초 잠금 |
+| **검증 위치** | 세션 컨트롤러 + PostgreSQL UNIQUE 제약 |
+| **적용 라우트** | `POST /api/sessions/:id/log`, `POST /api/v2/sessions/:id/log` |
+| **동일 내용** | **200** — 기존 로그의 동일한 `log_id` 반환 |
+| **다른 내용** | **409** — `"같은 분 구간에 다른 로그가 이미 존재합니다"` |
+| **DB 제약** | `(session_id, minute_index)` UNIQUE + `(session_id, client_log_id)` UNIQUE + `minute_index >= 1` CHECK |
 
 **현행 구현**
 
-1. `session-log-rate:{sessionId}` 키를 Redis `SET NX EX 60`으로 획득한다. 실패 시 400을 반환한다.
-2. `logged_at`은 서버 수신 시각 `new Date()`로 저장하며 분 단위로 절삭하지 않는다.
-3. DB INSERT 실패 시 Redis 잠금을 해제한다. 재전송 큐를 구현할 때는 원래 측정 시각과 중복 처리 정책을 별도로 확정해야 한다.
+1. v1은 서버 수신 시각, v2는 `measured_at`을 사용해 `minute_index = floor((기준 시각 - sessions.started_at) / 60초)`로 계산한다. 경과 시간이 60초 미만이면 400을 반환한다.
+2. 기존 행이 있으면 소수 둘째 자리로 정규화한 `gaze`, `blink`, `head`, 서버 계산 `total`, `face_detected`를 비교한다.
+3. 동일 내용은 기존 행을 반환하고 다른 내용은 409를 반환한다.
+4. 동시 INSERT는 DB UNIQUE 제약이 한 건만 허용한다. 동일 내용으로 충돌한 요청은 생성된 행을 조회해 200을 반환한다.
+5. 로그 저장과 세션 종료는 Serializable 트랜잭션으로 실행하고 직렬화 충돌을 재시도한다. 재시도 시 세션이 종료됐으면 409를 반환한다.
+6. v1의 `logged_at`은 최초 저장 요청의 서버 수신 시각이며 지연 전의 원래 구간은 복원하지 못한다.
+7. v2는 UUID v4 `client_log_id`와 UTC `measured_at`을 필수로 받고 원래 분 구간을 복원한다.
+8. 동일 v2 ID·정규화 payload는 200, 같은 ID의 다른 payload나 같은 분의 다른 ID는 409다.
 
 ---
 
@@ -261,27 +275,29 @@ WHERE ss.deleted_at IS NULL
 ```
 1. [④] HTTPS (Phase 5 배포 시 구성)
 2. [auth] JWT → req.user.sub
-3. [sessions route] gaze/blink/head/total 0~100 및 face_detected 타입 → 400
-4. [sessions controller] 세션 존재·소유자·진행 상태 및 total 가중 합산값 확인
-5. [Redis] 동일 세션 60초 잠금 SET NX, 실패 시 400
-6. [sessions controller] 서버 수신 시각으로 concentration_logs INSERT
-7. 200 응답
+3. [sessions route] gaze/blink/head/total 0~100 및 필수 face_detected 타입 → 400
+4. [sessions controller] 얼굴 미검출 0점, 세션 존재·소유자·진행 상태, total 가중 합산값 확인
+5. [sessions controller] 세션 시작 시각과 서버 수신 시각으로 minute_index 계산
+6. [PostgreSQL] Serializable 트랜잭션과 (session_id, minute_index) UNIQUE로 멱등 저장
+7. 동일 내용은 기존 로그 200, 다른 내용은 409
 ```
 
 ---
 
 ## 5. 로깅 및 테스트
 
-### 실패 로그 필드
+### 구조화 로그와 운영 카운터
 
-아래 구조화 로그 필드는 Phase 4 목표다. 현재 오류 처리기는 `console.error`로 오류 스택 또는 메시지를 출력하며 이 필드들을 별도로 기록하지 않는다.
+`requestContext`가 모든 응답 완료 시 JSON 한 줄을 기록하고 응답에 `X-Request-ID`를 넣는다. 클라이언트 요청 ID는 허용 문자와 길이를 검증한 뒤 사용한다.
 
 | 필드 | 예시 |
 | --- | --- |
-| `policy_id` | `"①"` ~ `"⑥"` |
+| `request_id` | 검증된 요청 ID 또는 서버 UUID |
 | `user_id` | JWT `sub` |
 | `method`, `path` | `POST /api/sessions/:id/log` |
-| `reason` | 검증 실패 사유 |
+| `status_code`, `duration_ms` | 응답 코드와 처리 시간 |
+
+401·403·5xx, Prisma 오류, Redis 연결 오류, 의존성 Health 실패, Roll-up 성공·실패는 프로세스 카운터로 누적해 `/health`의 `data.metrics`에서 확인한다. 메트릭 경로 라벨은 동적 UUID를 제외한 Express 라우트 패턴으로 정규화한다. 운영 로그에는 Authorization 헤더, JWT, 비밀번호 해시, SQL과 500 오류의 내부 메시지를 기록하지 않는다. 상세 필드와 장애 계약은 `docs/performance-operations.md`를 따른다.
 
 ### 단위·통합 테스트 (Phase 4)
 
@@ -289,20 +305,32 @@ WHERE ss.deleted_at IS NULL
 | --- | --- |
 | ① | `-1`, `101`, `"80"`, `NaN` → 400 |
 | ② | 타인 `session_id` → 403 |
-| ③ | 동일 세션에서 60초 미만 2회 POST → 400 |
+| ③ | 같은 분 구간·동일 내용 2회 POST → 같은 `log_id`로 200; 다른 내용 → 409; 동시 요청 → DB 한 행 |
 | ④ | `X-Forwarded-Proto: http` (prod) → 403 |
 | ⑤ | MEMBER가 invite 시도 → 403; `created_by_user_id`만 일치 + role MEMBER → 403 |
 | ⑥ | `default_session_scope=PRIVATE` + `share_scope=PUBLIC` → 403; feed에서 scope 초과 share 미노출 |
+
+### Phase 4-2 검증 결과 (2026-10-02)
+
+- Jest 9 suite·54 test 통과.
+- OpenAPI에 Bearer 인증이 명시된 34개 operation의 무토큰 요청이 모두 401을 반환했다.
+- 만료·변조·로그아웃 토큰은 401, Redis 조회 실패는 503으로 차단됨을 확인했다.
+- 세션·리포트 교차 사용자 접근, 그룹 역할, 생성자 비권한, 공유 범위와 필드별 공개 설정을 검증했다.
+- 친구 요청·공감·그룹 초대·세션 시작 동시 요청에서 한 건만 생성되고 나머지는 409를 반환했다.
+- SQL Injection과 저장형 XSS 형태 문자열은 실행되지 않고 문자열 그대로 저장·반환됐다. 화면 출력 시 이스케이프 책임은 제품 프런트엔드에 있다.
+- 500 응답은 모든 환경에서 일반 메시지만 반환하도록 고정했다. 상세 오류는 서버 로그에서만 확인한다.
 
 ---
 
 ## 6. 구현 체크리스트
 
-- [✅] `backend/src/routes/sessions.js` + `backend/src/controllers/sessionsController.js` — ① 점수·`face_detected` 형식과 가중 합산값 검증
-- [✅] `backend/src/services/redis.js` — ③ 세션별 60초 중복 전송 차단
+- [✅] `backend/src/routes/sessions.js` + `backend/src/controllers/sessionsController.js` — ① 점수·필수 `face_detected`·미검출 0점과 가중 합산값 검증
+- [✅] Prisma 스키마·마이그레이션 + 세션 컨트롤러 — ③ 서버 산출 분 구간과 DB 멱등 저장
 - [✅] 세션·리포트·공유 컨트롤러 — ② 소유자 검증 (별도 `sessionOwner.js` 없음)
 - [✅] 그룹·랭킹 컨트롤러 — ⑤ 활성 `group_members` 및 역할 검증 (별도 `groupAuth.js` 없음)
 - [✅] 공유 컨트롤러 — ⑥ scope 순위 비교 및 조회 제한 (별도 `privacyService.js` 없음)
 - [✅] `backend/src/middleware/errorHandler.js` — 일반 Prisma `P2002`를 409로 응답
-- [ ] Phase 4 — ①②③⑤⑥ 우회 시나리오·구조화 실패 로그 검증
+- [✅] Phase 4-1 — ①·③ 로그 규칙과 동시 멱등 저장 단위·실제 API 검증
+- [✅] Phase 4-2 — 인증, ②⑤⑥ 권한·프라이버시, 동시 충돌, 입력 문자열, 오류 노출 검증
+- [✅] Phase 4-5 — 요청 ID·사용자·경로·상태·처리 시간 구조화 로그와 실패 카운터 검증
 - [ ] Phase 5 — nginx HTTPS 구성과 필요 시 Express 보조 검사

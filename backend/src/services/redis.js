@@ -1,21 +1,29 @@
 // src/services/redis.js
-// Redis 클라이언트 싱글턴 — JWT 블랙리스트, 중복 전송 차단용 캐시
+// Redis 클라이언트 싱글턴 — JWT 블랙리스트용 캐시
 const Redis = require('ioredis');
 const { createHash } = require('crypto');
+const { logEvent, recordMetric } = require('./observability');
 
 const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
   lazyConnect: true,
   retryStrategy: (times) => {
     if (times > 3) {
-      console.error('[Redis] 재연결 실패 — Redis 없이 서버 계속 실행');
+      recordMetric('redis_connection_errors_total', { phase: 'retry_exhausted' });
+      logEvent('redis_retry_exhausted', {}, 'error');
       return null;
     }
     return Math.min(times * 200, 2000);
   },
 });
 
-redis.on('connect', () => console.log('[Redis] 연결 성공'));
-redis.on('error', (err) => console.error('[Redis] 연결 오류:', err.message));
+redis.on('connect', () => logEvent('redis_connected'));
+redis.on('error', (err) => {
+  recordMetric('redis_connection_errors_total', { phase: 'runtime' });
+  logEvent('redis_connection_error', {
+    error_code: err.code ?? null,
+    message: process.env.NODE_ENV === 'production' ? 'redis_connection_failed' : err.message,
+  }, 'error');
+});
 
 /**
  * JWT 블랙리스트에 토큰 추가
@@ -39,24 +47,8 @@ const isTokenBlacklisted = async (token) => {
   return result !== null;
 };
 
-/**
- * 세션 로그 전송 잠금 획득 (1분 중복 방지)
- * @param {string} sessionId
- * @param {number} ttlSeconds
- */
-const acquireLogRateLimit = async (sessionId, ttlSeconds = 60) => {
-  const result = await redis.set(`session-log-rate:${sessionId}`, '1', 'EX', ttlSeconds, 'NX');
-  return result === 'OK';
-};
-
-const releaseLogRateLimit = async (sessionId) => {
-  await redis.del(`session-log-rate:${sessionId}`);
-};
-
 module.exports = {
   redis,
   blacklistToken,
   isTokenBlacklisted,
-  acquireLogRateLimit,
-  releaseLogRateLimit,
 };

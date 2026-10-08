@@ -1,6 +1,14 @@
 jest.mock('../../backend/src/models/prismaClient', () => ({
+  users: {
+    findFirst: jest.fn(),
+  },
+  user_connections: {
+    findUnique: jest.fn(),
+  },
   user_connection_requests: {
     findUnique: jest.fn(),
+    findFirst: jest.fn(),
+    create: jest.fn(),
   },
   $transaction: jest.fn(),
 }));
@@ -92,5 +100,34 @@ describe('connection request atomic transition', () => {
       },
       error: '',
     });
+  });
+});
+
+describe('connection request concurrency', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    prisma.users.findFirst.mockResolvedValue({ id: 'receiver-id' });
+    prisma.user_connections.findUnique.mockResolvedValue(null);
+    prisma.user_connection_requests.findFirst.mockResolvedValue(null);
+  });
+
+  it('maps a concurrent pending-request unique collision to 409', async () => {
+    prisma.user_connection_requests.create.mockRejectedValue({ code: 'P2002' });
+    const req = {
+      user: { sub: 'requester-id' },
+      body: { receiver_user_id: 'receiver-id' },
+    };
+    const res = createResponse();
+    const next = jest.fn();
+
+    await connectionsController.sendRequest(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(
+      expect.objectContaining({
+        statusCode: 409,
+        message: '이미 처리 대기 중인 요청이 있습니다.',
+      }),
+    );
+    expect(res.status).not.toHaveBeenCalled();
   });
 });

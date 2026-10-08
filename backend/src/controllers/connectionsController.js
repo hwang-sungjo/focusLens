@@ -1,6 +1,7 @@
 // src/controllers/connectionsController.js
 const prisma = require('../models/prismaClient');
 const { createError } = require('../middleware/errorHandler');
+const { getPagination } = require('../utils/pagination');
 
 /** POST /api/connections/request */
 const sendRequest = async (req, res, next) => {
@@ -61,6 +62,9 @@ const sendRequest = async (req, res, next) => {
       error: '',
     });
   } catch (err) {
+    if (err.code === 'P2002') {
+      return next(createError('이미 처리 대기 중인 요청이 있습니다.', 409));
+    }
     next(err);
   }
 };
@@ -129,9 +133,14 @@ const getConnections = async (req, res, next) => {
   try {
     const userId = req.user.sub;
     const includePending = req.query.include_pending === 'true';
-    const connections = await prisma.user_connections.findMany({
-      where: { OR: [{ user_a_id: userId }, { user_b_id: userId }] },
-      orderBy: { created_at: 'desc' },
+    const { page, limit, skip } = getPagination(req.query);
+    const connectionWhere = { OR: [{ user_a_id: userId }, { user_b_id: userId }] };
+    const [connections, total] = await Promise.all([
+      prisma.user_connections.findMany({
+      where: connectionWhere,
+      orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
+      skip,
+      take: limit,
       include: {
         user_a: {
           select: {
@@ -146,7 +155,9 @@ const getConnections = async (req, res, next) => {
           },
         },
       },
-    });
+      }),
+      prisma.user_connections.count({ where: connectionWhere }),
+    ]);
 
     const serializedConnections = connections.map((connection) => {
       const friend = connection.user_a_id === userId ? connection.user_b : connection.user_a;
@@ -161,11 +172,17 @@ const getConnections = async (req, res, next) => {
 
     let pendingReceived = [];
     let pendingSent = [];
+    let pendingReceivedTotal = 0;
+    let pendingSentTotal = 0;
     if (includePending) {
-      const [received, sent] = await Promise.all([
+      const receivedWhere = { receiver_user_id: userId, status: 'PENDING' };
+      const sentWhere = { requester_user_id: userId, status: 'PENDING' };
+      const [received, sent, receivedTotal, sentTotal] = await Promise.all([
         prisma.user_connection_requests.findMany({
-          where: { receiver_user_id: userId, status: 'PENDING' },
-          orderBy: { created_at: 'desc' },
+          where: receivedWhere,
+          orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
+          skip,
+          take: limit,
           include: {
             requester: {
               select: {
@@ -176,8 +193,10 @@ const getConnections = async (req, res, next) => {
           },
         }),
         prisma.user_connection_requests.findMany({
-          where: { requester_user_id: userId, status: 'PENDING' },
-          orderBy: { created_at: 'desc' },
+          where: sentWhere,
+          orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
+          skip,
+          take: limit,
           include: {
             receiver: {
               select: {
@@ -187,7 +206,11 @@ const getConnections = async (req, res, next) => {
             },
           },
         }),
+        prisma.user_connection_requests.count({ where: receivedWhere }),
+        prisma.user_connection_requests.count({ where: sentWhere }),
       ]);
+      pendingReceivedTotal = receivedTotal;
+      pendingSentTotal = sentTotal;
 
       pendingReceived = received.map((request) => ({
         request_id: request.id,
@@ -213,6 +236,13 @@ const getConnections = async (req, res, next) => {
         connections: serializedConnections,
         pending_received: pendingReceived,
         pending_sent: pendingSent,
+        pagination: {
+          page,
+          limit,
+          total,
+          pending_received_total: pendingReceivedTotal,
+          pending_sent_total: pendingSentTotal,
+        },
       },
       error: '',
     });

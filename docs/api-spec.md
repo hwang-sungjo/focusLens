@@ -5,7 +5,7 @@
 > **인증 방식**: JWT Bearer Token (`Authorization: Bearer <access_token>`)  
 > **토큰 만료**: Access Token 1시간
 
-**구현 현황 (2026-09-22):** 아래 36개 API operation은 `backend/src/routes`에 구현돼 있으며 `docs/swagger.yaml`에 명세돼 있다. 인증은 Access Token만 지원하고 토큰 재발급 API는 없다. `GET /health`(DB·Redis 정상 시 200, 장애 시 503)와 `/api-docs`는 `/api` 밖의 백엔드 운영 경로다. AI 측 로그 API 클라이언트는 존재하지만 웹캠 측정 결과의 자동 전송은 아직 연결되지 않았다. 운영·통합 검증 상태는 `docs/backend-plan.md` Phase 4·5를 따른다.
+**구현 현황 (2026-10-06):** 아래 38개 API operation은 `backend/src/routes`에 구현돼 있으며 `docs/swagger.yaml`에 명세돼 있다. `npm run verify:openapi`으로 실제 Express 라우트와 명세의 일치를 검증한다. 인증은 1시간 Access Token과 30일 회전형 Refresh Token을 지원한다. `GET /health`(DB·Redis 정상 시 200, 장애 시 503)와 `/api-docs`는 `/api` 밖의 백엔드 운영 경로다. 집중도 로그 v1은 기존 AI 클라이언트의 다섯 필드를 유지하고, v2는 `client_log_id`와 `measured_at`으로 지연 재전송을 멱등 저장한다. Phase 4 최종 검증 결과는 `docs/phase4-verification.md`를 따른다.
 
 ---
 
@@ -47,6 +47,11 @@
 | 404 | 리소스 없음 |
 | 409 | 중복 리소스 (이메일 중복, 이미 연결된 친구 등) |
 | 500 | 서버 내부 오류 |
+| 503 | Redis 장애로 인증 상태 확인 또는 로그아웃 처리가 불가능함 |
+
+모든 보호 API는 JWT 검증 후 Redis 로그아웃 블랙리스트를 조회한다. Redis 조회 실패 시 fail-closed 503을 반환한다. 500 응답의 `error`에는 실행 환경과 관계없이 내부 예외, SQL, 스택, 토큰, 비밀번호 해시를 포함하지 않는다.
+
+모든 응답에는 `X-Request-ID` 헤더가 포함된다. 클라이언트가 영문·숫자와 `._:-`로 구성된 128자 이하의 `X-Request-ID`를 보내면 이를 사용하고, 그렇지 않으면 서버가 UUID를 생성한다. 목록 API의 `page` 기본값은 1, `limit` 기본값은 20이며 `limit` 최댓값은 100이다. 동일 시각의 행도 순서가 바뀌지 않도록 각 목록은 `id`를 마지막 정렬 키로 사용한다.
 
 ### 1.3 그룹 권한 판단 원칙
 
@@ -64,10 +69,18 @@
 ### 1.4 집중도 점수 산정
 
 ```
-focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
+focus_score = (gaze × 0.3) + (blink × 0.5) + (head × 0.2)
 ```
 
 백엔드는 요청의 `total`이 위 계산값(소수 둘째 자리 반올림)과 0.01 이내로 일치하는지 확인하고 계산값을 저장한다. 현재 `ai/`에는 같은 가중치의 계산 함수와 API 클라이언트가 있지만, 1분 점수 집계와 실시간 전송 연결은 미구현이다.
+
+### 1.5 세션 통계와 날짜 버킷
+
+- 평균 집중도는 세션에 포함된 모든 로그의 산술 평균이며 소수 둘째 자리로 반올림한다.
+- `face_detected=false` 로그는 계약에 따라 저장된 0점을 평균과 `DISTRACTED` 건수에 포함한다.
+- 기간 리포트와 랭킹의 일자는 세션 `started_at`의 **UTC 날짜**를 사용한다. 자정을 넘긴 세션의 전체 로그와 학습 시간도 시작일 한 버킷에 포함한다.
+- 기간 리포트·피드·랭킹·그룹 통계는 `COMPLETED`이며 `ended_at`이 존재하는 세션만 집계한다.
+- 세션 종료 상태 변경과 `reports` 생성은 하나의 Serializable 트랜잭션으로 처리한다.
 
 | 구간 | attention_state |
 | --- | --- |
@@ -110,7 +123,8 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
     "email": "user@example.com",
     "name": "홍길동",
     "access_token": "jwt",
-    "expires_in": 3600
+    "expires_in": 3600,
+    "refresh_token": "opaque-token"
   },
   "error": ""
 }
@@ -152,7 +166,8 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
   "data": {
     "user_id": "uuid",
     "access_token": "jwt",
-    "expires_in": 3600
+    "expires_in": 3600,
+    "refresh_token": "opaque-token"
   },
   "error": ""
 }
@@ -168,9 +183,55 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 
 ---
 
+### POST /api/auth/refresh
+
+Access Token을 재발급하고 Refresh Token을 회전한다. Refresh Token은 JSON body 또는 `focuslens_refresh_token` HttpOnly cookie로 전달할 수 있다. 서버는 원문 대신 SHA-256 해시만 저장하며, 이미 교체된 토큰이 재사용되면 같은 token family를 모두 폐기한다.
+
+| 항목 | 내용 |
+| --- | --- |
+| **Method** | `POST` |
+| **Path** | `/api/auth/refresh` |
+| **인증** | Access Token 불필요, Refresh Token 필요 |
+
+**Request Body**
+
+```json
+{
+  "refresh_token": "opaque-token"
+}
+```
+
+HttpOnly cookie를 사용하면 body는 생략할 수 있다.
+
+**Response `200`**
+
+```json
+{
+  "success": true,
+  "data": {
+    "access_token": "jwt",
+    "expires_in": 3600,
+    "refresh_token": "rotated-opaque-token"
+  },
+  "error": ""
+}
+```
+
+응답은 회전된 `focuslens_refresh_token` HttpOnly cookie도 설정한다. 운영 환경에서는 Secure가 활성화되며 기본 SameSite는 `lax`다.
+
+**에러 케이스**
+
+| 상태 | error 예시 |
+| --- | --- |
+| 400 | `refresh_token` 형식 오류 |
+| 401 | `"Refresh Token이 필요합니다."` |
+| 401 | `"유효하지 않은 Refresh Token입니다."` |
+
+---
+
 ### POST /api/auth/logout
 
-현재 access token을 Redis 블랙리스트에 등록하여 무효화한다.
+현재 Access Token을 Redis 블랙리스트에 등록하고 Refresh Token family를 폐기한다.
 
 | 항목 | 내용 |
 | --- | --- |
@@ -180,7 +241,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 
 **Request Body**
 
-없음
+선택적으로 `{ "refresh_token": "opaque-token" }`을 전달한다. 생략하면 해당 사용자의 활성 Refresh Token을 모두 폐기한다.
 
 **Response `200`**
 
@@ -199,14 +260,16 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 | 상태 | error 예시 |
 | --- | --- |
 | 401 | `"인증 토큰이 필요합니다"` |
-| 401 | `"만료되었거나 유효하지 않은 토큰입니다"` |
+| 401 | `"토큰이 만료되었습니다"` 또는 `"유효하지 않은 토큰입니다"` |
+| 401 | `"이미 로그아웃된 토큰입니다"` |
+| 503 | `"인증 상태를 확인할 수 없습니다"` |
 
 ---
 
 ## 3. 학습 세션 (Sessions)
 
 > 세션 소유자 검증: `sessions.user_id` = JWT `sub`  
-> `avg_focus_score`, `duration_seconds`는 DB에 저장하지 않고 `concentration_logs`에서 조회 시 계산한다.
+> `avg_focus_score`, `duration_seconds`는 `sessions`에 저장하지 않는다. 평균은 원본과 Roll-up tier를 합친 `v_session_metric_totals`, 기간은 시작·종료 시각에서 계산한다.
 
 ### POST /api/sessions/start
 
@@ -249,7 +312,11 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 
 ### POST /api/sessions/:id/log
 
-분 단위 집중도 로그 저장용 API. 현재 구현은 동일 세션의 60초 미만 재전송을 Redis로 차단하고, `logged_at`은 서버 수신 시각으로 기록한다. AI 측 실패 로그의 원래 측정 시각·재전송 정책은 통합 단계에서 확정해야 한다.
+분 단위 집중도 로그 저장용 API. 요청 형식은 기존 AI 클라이언트와 호환되는 다섯 필드를 유지한다. 백엔드는 세션 시작 후 완료된 60초 구간을 서버 수신 시각으로 판정하고, `(session_id, minute_index)` DB UNIQUE 제약으로 구간당 한 건만 저장한다.
+
+`minute_index = floor((서버 수신 시각 - sessions.started_at) / 60초)`이며 첫 완료 구간은 1이다. `logged_at`은 처음 저장에 성공한 서버 수신 시각이다. 요청에 원래 측정 시각이나 클라이언트 요청 ID가 없으므로 네트워크에서 한 구간 이상 지연된 재전송의 원래 구간은 백엔드만으로 복원할 수 없다.
+
+> v2도 별도 경로로 구현돼 있으며 v1은 기존 AI 클라이언트 호환을 위해 유지한다. 상세 결정은 `docs/client-contract-decisions.md`를 따른다.
 
 | 항목 | 내용 |
 | --- | --- |
@@ -281,9 +348,9 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 | `blink` | float | 0~100, blink_score |
 | `head` | float | 0~100, head_score |
 | `total` | float | 0~100, focus_score (가중 합산값) |
-| `face_detected` | boolean (선택) | AI가 산출한 분 단위 얼굴 검출 상태. 생략 시 현재 백엔드는 `true`로 저장 |
+| `face_detected` | boolean | 필수. `false`이면 네 점수가 모두 0이어야 함 |
 
-현재 AI API 클라이언트는 이 형태의 payload를 만들 수 있으나 웹캠 측정 루프에서 호출되지 않는다. 분 단위 `face_detected` 산출도 아직 구현되지 않았다.
+서버는 세부 점수를 소수 둘째 자리로 정규화하고 `total = gaze × 0.4 + blink × 0.3 + head × 0.3`을 다시 계산한다. 요청 `total`이 계산값과 0.01을 초과해 다르면 400을 반환하고, DB에는 서버 계산값을 저장한다.
 
 **Response `200`**
 
@@ -292,6 +359,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
   "success": true,
   "data": {
     "log_id": "uuid",
+    "minute_index": 1,
     "logged_at": "2026-06-27T09:01:00.000Z",
     "focus_score": 82.8,
     "attention_state": "FOCUSED",
@@ -306,12 +374,68 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 | 상태 | error 예시 |
 | --- | --- |
 | 400 | `"gaze, blink, head, total은 0~100 범위의 float여야 합니다"` |
-| 400 | `"total은 가중 합산값과 일치해야 합니다"` 또는 `face_detected` 타입 오류 |
-| 400 | `"1분 미만 중복 로그 전송입니다"` |
+| 400 | `face_detected` 누락·타입 오류 또는 얼굴 미검출 0점 규칙 위반 |
+| 400 | `"total은 가중 합산값과 일치해야 합니다"` |
+| 400 | `"첫 1분 측정 구간이 아직 완료되지 않았습니다"` |
 | 401 | `"인증 토큰이 필요합니다"` |
 | 403 | `"해당 세션에 대한 권한이 없습니다"` |
 | 404 | `"세션을 찾을 수 없습니다"` |
+| 409 | 같은 분 구간에 다른 내용이 이미 존재함 |
 | 409 | `"종료된 세션에는 로그를 추가할 수 없습니다"` |
+
+같은 분 구간에 정규화된 다섯 값이 모두 같은 요청이 다시 오면 새 행을 만들지 않고 기존 `log_id`로 200을 반환한다. 동시 요청도 DB UNIQUE 제약과 Serializable 트랜잭션으로 같은 규칙을 적용한다.
+
+---
+
+### POST /api/v2/sessions/:id/log
+
+지연 전송에도 원래 측정 구간을 유지하는 로그 API다. `client_log_id`는 재시도 동안 동일하게 유지하며 `measured_at`은 완료된 60초 측정 구간의 UTC 종료 시각이다.
+
+| 항목 | 내용 |
+| --- | --- |
+| **Method** | `POST` |
+| **Path** | `/api/v2/sessions/:id/log` |
+| **인증** | **필요** |
+
+**Request Body**
+
+```json
+{
+  "client_log_id": "123e4567-e89b-42d3-a456-426614174000",
+  "measured_at": "2026-10-06T06:01:00.000Z",
+  "gaze": 85.5,
+  "blink": 72.0,
+  "head": 90.0,
+  "total": 82.8,
+  "face_detected": true
+}
+```
+
+- `client_log_id`: UUID v4, 같은 로그 재시도 동안 불변
+- `measured_at`: UTC RFC 3339, `started_at + 60초` 이상이고 서버 시각보다 최대 5분 미래
+- `minute_index = floor((measured_at - started_at) / 60초)`
+- `(session_id, client_log_id)`와 `(session_id, minute_index)`를 각각 UNIQUE로 보호
+
+**Response `200`**
+
+```json
+{
+  "success": true,
+  "data": {
+    "log_id": "uuid",
+    "client_log_id": "123e4567-e89b-42d3-a456-426614174000",
+    "measured_at": "2026-10-06T06:01:00.000Z",
+    "minute_index": 1,
+    "logged_at": "2026-10-06T06:02:30.000Z",
+    "focus_score": 82.8,
+    "attention_state": "FOCUSED",
+    "face_detected": true
+  },
+  "error": ""
+}
+```
+
+같은 `client_log_id`, `measured_at`, 정규화 점수의 재전송은 기존 로그로 200을 반환한다. 같은 ID의 다른 payload 또는 같은 분 구간의 다른 ID는 409다. 나머지 소유권·상태·점수 검증은 v1과 같다.
 
 ---
 
@@ -429,7 +553,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 
 ### GET /api/sessions/:id
 
-세션 상세 및 분 단위 집중도 타임라인 조회.
+세션 상세 및 집중도 타임라인 조회. 최근 데이터는 분 단위이고 Roll-up된 과거 데이터는 시간·일·주 단위다.
 
 | 항목 | 내용 |
 | --- | --- |
@@ -461,19 +585,28 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
     "duration_seconds": 3600,
     "timeline": [
       {
+        "granularity": "MINUTE",
+        "minute_index": 1,
         "logged_at": "2026-06-27T09:01:00.000Z",
         "gaze_score": 85.5,
         "blink_score": 72.0,
         "head_score": 90.0,
         "focus_score": 82.8,
         "attention_state": "FOCUSED",
-        "face_detected": true
+        "face_detected": true,
+        "log_count": 1,
+        "focused_count": 1,
+        "normal_count": 0,
+        "distracted_count": 0,
+        "face_not_detected_count": 0
       }
     ]
   },
   "error": ""
 }
 ```
+
+`granularity`는 `MINUTE`, `HOUR`, `DAY`, `WEEK` 중 하나다. 집계 행은 `minute_index`, `attention_state`, `face_detected`가 `null`이며, 점수는 해당 버킷 평균이다. `log_count`와 상태별 건수가 포함된 원본 분 로그 수를 나타낸다. 세션 리포트의 `timeline`도 같은 형식을 사용한다.
 
 **에러 케이스**
 
@@ -527,12 +660,20 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
     },
     "timeline": [
       {
+        "granularity": "MINUTE",
+        "minute_index": 1,
         "logged_at": "2026-06-27T09:01:00.000Z",
         "gaze_score": 85.5,
         "blink_score": 72.0,
         "head_score": 90.0,
         "focus_score": 82.8,
-        "attention_state": "FOCUSED"
+        "attention_state": "FOCUSED",
+        "face_detected": true,
+        "log_count": 1,
+        "focused_count": 1,
+        "normal_count": 0,
+        "distracted_count": 0,
+        "face_not_detected_count": 0
       }
     ],
     "created_at": "2026-06-27T10:00:05.000Z"
@@ -554,7 +695,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 
 ### GET /api/reports/weekly
 
-최근 7일 일별 평균 집중도 요약.
+기준일을 포함한 최근 7개 UTC 날짜의 일별 평균 집중도 요약. 세션 시작일을 버킷 기준으로 사용한다.
 `daily_summaries`는 데이터가 없는 날짜를 포함해 7개 날짜를 반환하며 해당 날짜 평균은 `null`이다. 기간 전체에 로그가 없으면 `weekly_avg_focus_score`도 `null`이다.
 아래 응답 예시는 `daily_summaries` 배열의 한 날짜만 보여준다.
 
@@ -610,7 +751,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 
 ### GET /api/reports/monthly
 
-기준일을 포함한 최근 30일의 일별 집중도 요약. `COMPLETED` 세션만 집계한다.
+기준일을 포함한 최근 30개 UTC 날짜의 일별 집중도 요약. `COMPLETED` 세션만 집계하며 세션 시작일을 버킷 기준으로 사용한다.
 `daily_summaries`는 데이터가 없는 날짜를 포함해 30개 날짜를 반환하며 해당 날짜 평균은 `null`이다. 기간 전체에 로그가 없으면 `monthly_avg_focus_score`도 `null`이다.
 아래 응답 예시는 `daily_summaries` 배열의 한 날짜만 보여준다.
 
@@ -949,6 +1090,8 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 | 이름 | 필수 | 설명 |
 | --- | --- | --- |
 | `include_pending` | N | `true` 시 수신·발신 대기 요청 포함 (기본 `false`) |
+| `page` | N | 페이지 번호 (기본 1) |
+| `limit` | N | 페이지 크기 (기본 20, 최대 100) |
 
 **Request Body**
 
@@ -970,7 +1113,14 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
       }
     ],
     "pending_received": [],
-    "pending_sent": []
+    "pending_sent": [],
+    "pagination": {
+      "page": 1,
+      "limit": 20,
+      "total": 42,
+      "pending_received_total": 3,
+      "pending_sent_total": 2
+    }
   },
   "error": ""
 }
@@ -1048,7 +1198,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 | 403 | `"해당 그룹의 구성원이 아닙니다"` |
 | 404 | `"세션을 찾을 수 없습니다"` |
 | 409 | `"동일 범위로 이미 공유된 세션입니다"` |
-| 409 | `"진행 중인 세션은 공유할 수 없습니다"` |
+| 409 | `"완료되지 않은 세션은 공유할 수 없습니다"` |
 
 ---
 
@@ -1067,7 +1217,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 | 이름 | 필수 | 설명 |
 | --- | --- | --- |
 | `page` | N | 페이지 번호 (기본 1) |
-| `limit` | N | 페이지 크기 (기본 20) |
+| `limit` | N | 페이지 크기 (기본 20, 최대 100) |
 | `scope` | N | `all` \| `friends` \| `public` (기본 `all`) |
 
 **Request Body**
@@ -1228,7 +1378,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 
 ### GET /api/rankings
 
-집중도·학습 시간 랭킹 조회. `ranking_participation=false` 사용자는 집계에서 제외한다.
+집중도·학습 시간 랭킹 조회. 완료 세션을 UTC 시작일 기준으로 집계하며 `ranking_participation=false` 사용자는 제외한다.
 
 | 항목 | 내용 |
 | --- | --- |
@@ -1304,6 +1454,13 @@ JWT 사용자가 `ACTIVE` 구성원으로 속한 그룹 목록을 최근 참여�
 | **Path** | `/api/groups` |
 | **인증** | **필요** |
 
+**Query Parameters**
+
+| 이름 | 필수 | 설명 |
+| --- | --- | --- |
+| `page` | N | 페이지 번호 (기본 1) |
+| `limit` | N | 페이지 크기 (기본 20, 최대 100) |
+
 **Response `200`**
 
 ```json
@@ -1323,7 +1480,12 @@ JWT 사용자가 `ACTIVE` 구성원으로 속한 그룹 목록을 최근 참여�
         "joined_at": "2026-06-27T09:00:00.000Z",
         "created_at": "2026-06-20T09:00:00.000Z"
       }
-    ]
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 20,
+      "total": 3
+    }
   },
   "error": ""
 }
@@ -1691,13 +1853,20 @@ JWT 사용자가 `ACTIVE` 구성원으로 속한 그룹 목록을 최근 참여�
 
 ### GET /api/groups/:id/dashboard
 
-`v_group_member_stats` 기반 그룹 학습 통계를 조회한다.
+페이지에 포함된 구성원의 완료 세션과 `v_session_metric_totals`를 일괄 조회해 그룹 학습 통계를 계산한다. `group_data_sharing=false` 구성원은 멤버 목록에는 남지만 통계가 0과 `null`로 표시된다.
 
 | 항목 | 내용 |
 | --- | --- |
 | **Method** | `GET` |
 | **Path** | `/api/groups/:id/dashboard` |
 | **인증** | **필요** |
+
+**Query Parameters**
+
+| 이름 | 필수 | 설명 |
+| --- | --- | --- |
+| `page` | N | 페이지 번호 (기본 1) |
+| `limit` | N | 페이지 크기 (기본 20, 최대 100) |
 
 **Response `200`**
 
@@ -1719,7 +1888,12 @@ JWT 사용자가 `ACTIVE` 구성원으로 속한 그룹 목록을 최근 참여�
         "avg_focus_score": 78.5,
         "last_session_at": "2026-06-27T09:00:00.000Z"
       }
-    ]
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 20,
+      "total": 8
+    }
   },
   "error": ""
 }
@@ -1836,6 +2010,8 @@ JWT 사용자가 `ACTIVE` 구성원으로 속한 그룹 목록을 최근 참여�
 | 이름 | 필수 | 설명 |
 | --- | --- | --- |
 | `status` | N | `ACTIVE` \| `COMPLETED` \| `CANCELLED` |
+| `page` | N | 페이지 번호 (기본 1) |
+| `limit` | N | 페이지 크기 (기본 20, 최대 100) |
 
 **Request Body**
 
@@ -1861,7 +2037,12 @@ JWT 사용자가 `ACTIVE` 구성원으로 속한 그룹 목록을 최근 참여�
         "is_assigned_to_me": true,
         "created_at": "2026-06-27T09:00:00.000Z"
       }
-    ]
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 20,
+      "total": 5
+    }
   },
   "error": ""
 }
@@ -2047,7 +2228,7 @@ JWT 사용자가 `ACTIVE` 구성원으로 속한 그룹 목록을 최근 참여�
 | --- | --- | --- |
 | `target_member_id` | N | 특정 멤버 필터 (`OWNER`/`MANAGER` 전용) |
 | `page` | N | 페이지 번호 (기본 1) |
-| `limit` | N | 페이지 크기 (기본 20) |
+| `limit` | N | 페이지 크기 (기본 20, 최대 100) |
 
 **Request Body**
 

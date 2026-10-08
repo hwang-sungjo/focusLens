@@ -18,9 +18,23 @@ const notFound = (req, res) => {
  * 전역 에러 핸들러 (4-argument Express 에러 핸들러)
  * next(err) 또는 throw된 에러를 처리
  */
+const { logEvent, recordMetric } = require('../services/observability');
+
 // eslint-disable-next-line no-unused-vars
 const errorHandler = (err, req, res, next) => {
-  console.error(`[Error] ${err.stack || err.message}`);
+  const isDatabaseError = typeof err.code === 'string' && /^P\d{4}$/.test(err.code);
+  if (isDatabaseError) recordMetric('database_errors_total', { code: err.code });
+  logEvent('application_error', {
+    request_id: req.requestId ?? null,
+    user_id: req.user?.sub ?? null,
+    method: req.method,
+    path: (req.originalUrl || req.path || '').split('?')[0],
+    error_name: err.name,
+    error_code: err.code ?? null,
+    message: (err.statusCode || err.status) < 500 || process.env.NODE_ENV !== 'production'
+      ? err.message
+      : 'internal_error',
+  }, 'error');
 
   // Prisma 에러 처리
   if (err.code === 'P2002') {
@@ -40,10 +54,9 @@ const errorHandler = (err, req, res, next) => {
   }
 
   const statusCode = err.statusCode || err.status || 500;
-  const message =
-    process.env.NODE_ENV === 'production' && statusCode === 500
-      ? '서버 내부 오류가 발생했습니다.'
-      : err.message || '서버 내부 오류가 발생했습니다.';
+  const message = statusCode >= 500
+    ? '서버 내부 오류가 발생했습니다.'
+    : err.message || '요청 처리 중 오류가 발생했습니다.';
 
   res.status(statusCode).json({
     success: false,

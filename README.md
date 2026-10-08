@@ -6,9 +6,9 @@ FocusLens는 사용자의 집중 세션과 집중도 데이터를 기록·분석
 
 | 영역 | 상태 | 설명 |
 | --- | --- | --- |
-| Backend | MVP 구현 완료 | 인증, 세션, 리포트, 소셜, 랭킹, 그룹 API 및 Swagger UI |
-| Frontend | 개발 예정 | `frontend/` 작업 영역만 생성된 상태 |
-| AI | 개발 예정 | `ai/` 작업 영역만 생성된 상태이며 추론 위치와 구성은 추후 확정 |
+| Backend | Phase 1~4 완료 + 연동 확장 | 38개 API, 로그 v2, Refresh Token, Roll-up, 보안·성능 검증 완료 |
+| Frontend | 구현 전 | Git 추적 제품 소스와 빌드 설정이 없음 |
+| AI | 부분 구현 | 웹캠 특징 추출·점수 함수·API 클라이언트 구현, 1분 집계·자동 전송 미구현 |
 
 ## 전체 프로젝트 아키텍처
 
@@ -16,9 +16,9 @@ FocusLens는 사용자의 집중 세션과 집중도 데이터를 기록·분석
 
 ```mermaid
 flowchart LR
-    U[사용자] --> FE["Frontend<br/>개발 예정"]
+    U[사용자] --> FE["Frontend<br/>구현 전"]
     FE -->|HTTPS · JSON · JWT| API["Backend API<br/>Node.js · Express"]
-    AI["AI 집중도 추론<br/>개발 예정"] -->|집중도 로그| API
+    AI["AI 집중도 추론<br/>특징 추출 구현 · 집계/연동 대기"] -->|집중도 로그| API
 
     API --> ORM[Prisma ORM]
     ORM -->|읽기 · 쓰기| TABLES
@@ -26,19 +26,19 @@ flowchart LR
     subgraph DB[PostgreSQL]
         TABLES[(기본 테이블)] --> VIEW["통계 View<br/>리포트 · 랭킹 · 그룹 집계"]
     end
-    API --> CACHE[("Redis<br/>토큰 블랙리스트 · 요청 제한")]
+    API --> CACHE[("Redis<br/>토큰 블랙리스트")]
     SPEC["OpenAPI<br/>docs/swagger.yaml"] --> SWAGGER[Swagger UI]
     API -->|제공| SWAGGER
 ```
 
-프런트엔드와 AI 영역은 개발 예정이며, 현재 실행 가능한 구성은 Backend API, PostgreSQL, Redis다. 클라이언트는 JWT 기반 HTTP API를 통해 데이터에 접근하고, 데이터베이스에 직접 쓰지 않는다. 평균 집중도, 학습 시간, 반응 수, 랭킹과 같은 파생 값은 PostgreSQL View에서 계산한다.
+백엔드는 Phase 1~4를 완료했다. AI는 로컬 웹캠 특징 추출 프로그램까지 실행할 수 있지만 1분 집계와 API 자동 전송은 연결되지 않았고, 제품 프런트엔드는 구현 전이다. 클라이언트는 JWT 기반 HTTP API를 통해 데이터에 접근하고 데이터베이스에 직접 쓰지 않는다. 평균 집중도, 학습 시간, 반응 수, 랭킹과 같은 파생 값은 PostgreSQL View에서 계산한다. Phase 5를 제외한 AI·프런트 연동 대기 항목은 `docs/integration-readiness.md`를 따른다.
 
 ### 저장소 구조
 
 ```text
 focusLens/
-├── frontend/                        # 프런트엔드 개발 영역 (현재 미구현)
-├── ai/                              # AI 집중도 추론 개발 영역 (현재 미구현)
+├── frontend/                        # 제품 프런트엔드 구현 대기
+├── ai/                              # 웹캠 특징 추출 구현, 1분 집계·API 연결 대기
 ├── backend/                         # Express API 애플리케이션
 │   ├── app.js                       # 미들웨어, 라우터, Health Check, Swagger UI
 │   ├── server.js                    # HTTP 서버 진입점
@@ -49,10 +49,10 @@ focusLens/
 │       ├── controllers/             # 도메인별 요청 처리와 비즈니스 로직
 │       ├── middleware/              # 인증, 검증 결과, 전역 오류 처리
 │       ├── models/prismaClient.js   # Prisma Client 싱글턴
-│       ├── services/redis.js        # 토큰 블랙리스트·로그 전송 제한
+│       ├── services/redis.js        # 토큰 블랙리스트와 Redis 연결
 │       └── utils/focusScore.js      # 집중도 계산·평균·상태 판정
 ├── prisma/
-│   ├── schema.prisma                # 16개 도메인 모델
+│   ├── schema.prisma                # 도메인 16개와 Roll-up 3개 모델
 │   ├── migrations/                  # DB 스키마·제약·View 마이그레이션
 │   ├── views.sql                    # 통계 View 재적용 스크립트
 │   └── seed.js                      # 개발용 시드 데이터

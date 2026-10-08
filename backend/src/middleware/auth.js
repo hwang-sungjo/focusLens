@@ -5,7 +5,7 @@ const { isTokenBlacklisted } = require('../services/redis');
 
 /**
  * Bearer 토큰을 검증하고 req.user에 페이로드를 주입
- * 실패 시 401 응답 반환
+ * 토큰 오류는 401, 블랙리스트 저장소 장애는 503 응답 반환
  */
 const authenticate = async (req, res, next) => {
   let payload;
@@ -56,7 +56,11 @@ const authenticate = async (req, res, next) => {
     req.token = token;
     return next();
   } catch (err) {
-    return next(err);
+    return res.status(503).json({
+      success: false,
+      data: {},
+      error: '인증 상태를 확인할 수 없습니다.',
+    });
   }
 };
 

@@ -28,7 +28,7 @@ describe('isValidScore', () => {
 });
 
 describe('calcFocusScore', () => {
-  it('calculates weighted focus score: S = (gaze×0.4) + (blink×0.3) + (head×0.3)', () => {
+  it('calculates weighted focus score: S = (gaze×0.3) + (blink×0.5) + (head×0.2)', () => {
     expect(calcFocusScore(100, 100, 100)).toBe(100);
     expect(calcFocusScore(0, 0, 0)).toBe(0);
     expect(calcFocusScore(100, 0, 0)).toBe(40);
