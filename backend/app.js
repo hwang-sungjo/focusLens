@@ -10,6 +10,7 @@ const YAML = require('yaml');
 
 const authRouter = require('./src/routes/auth');
 const sessionsRouter = require('./src/routes/sessions');
+const v2SessionsRouter = require('./src/routes/v2Sessions');
 const reportsRouter = require('./src/routes/reports');
 const usersRouter = require('./src/routes/users');
 const connectionsRouter = require('./src/routes/connections');
@@ -89,6 +90,7 @@ app.use(
 // ── API 라우터 마운트 ──────────────────────────────────────────────
 app.use('/api/auth', authRouter);
 app.use('/api/sessions', sessionsRouter);
+app.use('/api/v2/sessions', v2SessionsRouter);
 app.use('/api/reports', reportsRouter);
 app.use('/api/users', usersRouter);
 app.use('/api/connections', connectionsRouter);

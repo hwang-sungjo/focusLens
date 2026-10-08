@@ -1,8 +1,8 @@
 # FocusLens 백엔드 전용 구현 계획
 
-> 기준일: 2026-10-06
+> 기준일: 2026-10-08
 >
-> 기준 커밋: `1ddd170`
+> Phase 1~4 완료 기준 커밋: `866bda9`
 > 이 문서는 이후 백엔드 작업의 진행 기준이다. Phase 1부터 Phase 5까지 순서대로 진행하고, 완료 조건을 충족한 항목만 `[✅]`로 변경한다.
 
 ## 0. 작업 범위
@@ -24,6 +24,8 @@ AI와 프런트엔드는 외부 클라이언트로 취급한다. Phase 4에서�
 
 ### 백엔드가 수신하는 현재 로그 형식
 
+v1은 기존 AI 클라이언트 호환용이다.
+
 ```json
 {
   "gaze": 85.5,
@@ -34,10 +36,25 @@ AI와 프런트엔드는 외부 클라이언트로 취급한다. Phase 4에서�
 }
 ```
 
-- 기존 `ai/` 클라이언트와 호환되도록 요청 필드를 추가하지 않는다.
-- `logged_at`과 분 구간 식별자는 서버의 세션 시작 시각과 수신 시각으로 결정한다.
-- 서버에 도착하기 전의 정확한 측정 시각과 지연 재전송 여부는 현재 요청만으로 복원할 수 없다. 이 제약을 API 문서에 명시한다.
-- 향후 클라이언트 계약을 변경할 때만 `minute_index`, 원래 측정 시각, 클라이언트 요청 ID 도입을 별도 버전으로 검토한다.
+- v1 `logged_at`과 분 구간은 서버의 세션 시작 시각과 수신 시각으로 결정한다.
+
+신규 연동은 v2를 사용한다.
+
+```json
+{
+  "client_log_id": "uuid-v4",
+  "measured_at": "2026-10-08T06:01:00.000Z",
+  "gaze": 85.5,
+  "blink": 72.0,
+  "head": 90.0,
+  "total": 82.8,
+  "face_detected": true
+}
+```
+
+- v2는 `measured_at`으로 원래 분 구간을 계산한다.
+- `(session_id, client_log_id)`와 `(session_id, minute_index)` UNIQUE 제약으로 재전송을 판정한다.
+- v1과 v2 구현 계약은 `docs/api-spec.md`, 클라이언트 규칙은 `docs/client-contract-decisions.md`를 따른다.
 
 ---
 
@@ -49,18 +66,33 @@ AI와 프런트엔드는 외부 클라이언트로 취급한다. Phase 4에서�
 | Phase 2 | 실행 환경 구축 | Express, Prisma, PostgreSQL, Redis, Docker, Health check | ✅ 완료 |
 | Phase 3 | MVP API 구현 | 인증, 세션, 리포트, 소셜, 랭킹, 그룹 API 구현 | ✅ 완료 |
 | Phase 4 | 백엔드 검증·고도화 | 로그 수신 안정화, 보안 테스트, Roll-up, 성능 검증 | ✅ 완료 |
-| Phase 5 | 백엔드 배포·운영 | AWS, CI/CD, HTTPS, 모니터링, 복구 절차 검증 | 대기 |
+| Phase 5 | 백엔드 배포·운영 | AWS, CI/CD, HTTPS, 모니터링, 복구 절차 검증 | 대기 — 외부 연동 잔여 목록에서 제외 |
 
 ### 현재 기준선
 
 | 항목 | 확인 결과 |
 | --- | --- |
-| API | Express 라우터 8개 도메인과 OpenAPI 36개 operation 존재 |
-| 데이터 | Prisma 모델 19개, PostgreSQL 마이그레이션 10개, 조회 View 5개 존재 |
-| 인증 | JWT Access Token, Redis 로그아웃 블랙리스트 구현 |
-| 세션 로그 | 필수 얼굴 상태·0점 규칙, 서버 분 구간, DB 멱등 저장, Serializable 종료 경쟁 처리 구현 |
-| 테스트 | 2026-10-06 기준 Jest 12 suite, 73 test 및 임시 PostgreSQL Roll-up·성능 검증 통과 |
+| API | Express 라우터 8개 도메인과 OpenAPI 38개 operation 존재 |
+| 데이터 | Prisma 모델 20개, PostgreSQL 마이그레이션 11개, 조회 View 5개 존재 |
+| 인증 | JWT Access Token, Redis 블랙리스트, 회전형 Refresh Token과 재사용 family 폐기 구현 |
+| 세션 로그 | v1 서버 분 구간과 v2 측정 시각·client ID 멱등 저장, Serializable 경쟁 처리 구현 |
+| 테스트 | 2026-10-06 기준 Jest 13 suite, 87 test와 로그 v2·Refresh 실제 HTTP 검증 통과 |
 | 미구현 | Phase 5 인프라·배포 자동화·운영 검증 |
+
+### Phase 1~4 완료 및 외부 연동 재점검
+
+- [✅] Phase 1 설계 7/7 완료 확인
+- [✅] Phase 2 환경 구축 7/7 완료 확인
+- [✅] Phase 3 MVP API 9/9 완료 확인
+- [✅] Phase 4 세부 작업 42/42와 최종 게이트 6/6 완료 확인
+- [✅] 백엔드 Jest 73 test와 OpenAPI 36 operation 재검증
+- [✅] 프런트엔드 구현 전, AI 부분 구현 상태 확인
+- [✅] Phase 5를 제외한 남은 작업을 지금 결정 가능/AI 연동/프런트 완료 후로 분리
+- [✅] 로그 v2·Refresh Token·AI 재시도·인수 기준 확정
+- [✅] 프런트 API 매핑과 제품 E2E 시나리오 작성
+- [✅] 로그 v2·Refresh Token 구현, migration·OpenAPI·fixture·실제 HTTP 검증
+
+세부 판정과 권장 순서는 `docs/integration-readiness.md`를 단일 기준으로 사용한다. Phase 1~4 완료는 백엔드 범위이며 제품 전체 완료를 의미하지 않는다. Phase 5 인프라·배포·운영 계획은 아래 별도 절에 유지하되 외부 연동 잔여 목록에는 포함하지 않는다.
 
 ---
 
@@ -73,7 +105,7 @@ AI와 프런트엔드는 외부 클라이언트로 취급한다. Phase 4에서�
 - [✅] JWT 인증과 세션 소유권 검증 기준 확정
 - [✅] 그룹 권한을 `group_members.group_role`로 판단하도록 확정
 - [✅] 세션 공유에 `user_privacy_settings.default_session_scope`를 적용하도록 확정
-- [✅] 집중도 점수식을 `gaze × 0.4 + blink × 0.3 + head × 0.3`으로 확정
+- [✅] 집중도 점수식을 `gaze × 0.3 + blink × 0.5 + head × 0.2`으로 확정
 - [✅] 30일 이후 집중도 원본을 집계하는 Roll-up 정책 설계
 
 ## Phase 2. 백엔드 환경 구축
@@ -216,6 +248,8 @@ Phase 4는 아래 순서대로 진행한다. 각 단계의 테스트가 통과�
 
 Phase 4 최종 게이트를 통과한 뒤 진행한다.
 
+Phase 5 항목은 AI·프런트 외부 연동 잔여 목록과 분리해 이 절에서만 관리한다.
+
 ### 5-1. 인프라
 
 - [ ] AWS 실행 환경과 네트워크 구조 확정
@@ -261,8 +295,8 @@ Phase 4 최종 게이트를 통과한 뒤 진행한다.
 다음 항목은 백엔드 구현을 막지 않으며 현재 계획의 완료 기준에서 제외한다.
 
 - 실제 AI 카메라 측정과 1분 집계 정확도 검증
-- AI 클라이언트의 오프라인 큐와 JWT 갱신
-- 원래 측정 시각과 클라이언트 요청 ID를 포함하는 차기 로그 계약
+- AI 클라이언트의 오프라인 큐와 구현된 Refresh Token API 연결
+- AI 클라이언트의 `client_log_id`·`measured_at` 생성과 구현된 로그 v2 연결
 - 제품 프런트엔드 로그인·세션·리포트 E2E
 - 브라우저에서 저장형 XSS 문자열이 표시되는 방식 검증
 
@@ -276,4 +310,7 @@ Phase 4 최종 게이트를 통과한 뒤 진행한다.
 4. Phase 4-4 Roll-up 구현 — 완료
 5. Phase 4-5 성능·운영 안정성 — 완료
 6. Phase 4 최종 게이트 — 완료
-7. Phase 5-1 인프라 설계 — 다음 작업
+7. Phase 5 제외 외부 연동 대기 항목 분류 — 완료
+8. 로그 v2·장시간 세션 인증 정책 결정 — 완료
+9. 로그 v2·Refresh Token 백엔드 구현과 fixture·실제 HTTP 통합 테스트 — 완료
+10. AI 보정·blink·1분 집계·전송 큐 구현 — `ai/` 외부 작업으로 대기

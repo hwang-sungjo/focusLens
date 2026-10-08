@@ -1,23 +1,23 @@
 # FocusLens JWT 인증 흐름
 
 > **기준 문서**: `docs/api-spec.md`, `docs/erd.md`  
-> **인증 방식**: Access Token 기반 **Stateless** JWT  
-> **토큰 만료**: 1시간 (`expires_in: 3600`)
+> **인증 방식**: Access Token JWT + 회전형 opaque Refresh Token
+> **토큰 만료**: Access Token 1시간, Refresh Token 30일
 
 ---
 
 ## 1. 개요
 
-FocusLens 백엔드는 서버 세션을 저장하지 않는 Stateless JWT 인증을 사용한다.  
-클라이언트는 로그인(또는 회원가입) 시 발급받은 Access Token을 `Authorization` 헤더에 실어 보호 API를 호출한다.
+FocusLens 백엔드는 보호 API에 JWT Access Token을 사용하고, 장시간 세션의 재발급을 위해 DB에 해시만 저장하는 회전형 Refresh Token을 사용한다. 클라이언트는 Access Token을 `Authorization` 헤더에 실어 보호 API를 호출한다.
 
 | 항목 | 값 |
 | --- | --- |
-| 토큰 종류 | Access Token only (Refresh Token 미사용) |
+| 토큰 종류 | Access Token JWT + opaque Refresh Token |
 | 전달 방식 | `Authorization: Bearer <access_token>` |
 | 서명 알고리즘 | HS256 (환경변수 `JWT_SECRET`) |
-| 만료 시간 | 1시간 |
-| 로그아웃 | Redis 블랙리스트 등록 |
+| 만료 시간 | Access 1시간, Refresh 30일 |
+| Refresh 저장 | 서버 SHA-256 해시, AI 보안 저장소, 웹 HttpOnly cookie |
+| 로그아웃 | Access Redis 블랙리스트 + Refresh family 폐기 |
 
 ### 관련 ERD 테이블
 
@@ -25,6 +25,7 @@ FocusLens 백엔드는 서버 세션을 저장하지 않는 Stateless JWT 인증
 | --- | --- |
 | `users` | `id`, `email`, `password_hash`, `role`, `status` — 로그인 검증 및 JWT payload 출처 |
 | `group_members` | 그룹 API 권한 판단 (`group_role`, `status`) — JWT `sub`로 조회 |
+| `refresh_tokens` | 토큰 해시, family, 만료·사용·폐기·교체 상태 저장 |
 
 ---
 
@@ -69,8 +70,8 @@ sequenceDiagram
   C->>A: POST /api/auth/login { email, password }
   A->>D: users 조회 + bcrypt 검증
   D-->>A: user (id, email, role, status)
-  A->>A: JWT 서명 (exp = now + 1h)
-  A-->>C: 200 { access_token, expires_in: 3600 }
+  A->>A: JWT 서명 + Refresh Token 해시 저장
+  A-->>C: 200 { access_token, refresh_token, expires_in: 3600 }
 
   C->>M: GET /api/sessions (Authorization: Bearer token)
   M->>M: Bearer 토큰 추출
@@ -105,9 +106,10 @@ sequenceDiagram
 | 3 | `bcrypt`로 `password`와 `password_hash` 비교 |
 | 4 | `users.status`가 `ACTIVE`인지 확인 (비활성 → 403) |
 | 5 | payload `{ sub: users.id, email, role }` 로 JWT 서명, `exp` = 현재 + 1시간 |
-| 6 | `{ access_token, expires_in: 3600 }` 응답 |
+| 6 | 256bit Refresh Token 생성, SHA-256 해시와 30일 만료 저장 |
+| 7 | `{ access_token, refresh_token, expires_in: 3600 }` 응답과 HttpOnly cookie 설정 |
 
-회원가입(`POST /api/auth/register`) 성공 시에도 동일한 방식으로 Access Token을 즉시 발급한다.
+회원가입(`POST /api/auth/register`) 성공 시에도 같은 토큰 쌍을 즉시 발급한다.
 
 **실패 응답**
 
@@ -209,9 +211,9 @@ JWT sub → sessions.id = :id 조회 → sessions.user_id === sub ?
 
 ---
 
-## 5. 로그아웃 — Redis 블랙리스트
+## 5. 로그아웃 — Access 블랙리스트와 Refresh 폐기
 
-FocusLens는 Refresh Token을 사용하지 않으므로, 로그아웃 시 **현재 Access Token을 Redis 블랙리스트에 등록**하여 만료 시각까지 재사용을 차단한다.
+로그아웃 시 현재 Access Token을 Redis 블랙리스트에 등록하고 전달된 Refresh Token의 family를 폐기한다. Refresh Token을 생략하면 해당 사용자의 모든 활성 Refresh Token을 폐기한다.
 
 **엔드포인트**: `POST /api/auth/logout` (인증 필요)
 
@@ -222,12 +224,15 @@ sequenceDiagram
   participant C as Client
   participant A as Auth API
   participant R as Redis
+  participant D as PostgreSQL
 
-  C->>A: POST /api/auth/logout (Bearer token)
+  C->>A: POST /api/auth/logout (Bearer + refresh_token)
   A->>A: JWT 미들웨어 검증
   A->>A: token에서 exp 추출
   A->>R: SET blacklist:{token_hash} = 1 EX {remaining_ttl}
   R-->>A: OK
+  A->>D: refresh token family revoked_at 갱신
+  D-->>A: OK
   A-->>C: 200 { message: "로그아웃되었습니다" }
 ```
 
@@ -236,7 +241,8 @@ sequenceDiagram
 | 1 | JWT 미들웨어로 토큰 유효성 확인 |
 | 2 | 토큰 문자열(또는 jti)의 해시로 Redis 키 생성: `blacklist:{sha256(token)}` |
 | 3 | TTL = `exp - now` (남은 만료 시간). 이미 만료된 토큰은 등록 생략 가능 |
-| 4 | 이후 동일 토큰으로 요청 시 미들웨어 4단계에서 **401** 반환 |
+| 4 | Refresh Token family의 활성 행에 `revoked_at` 기록 |
+| 5 | 이후 동일 Access/Refresh Token 사용 시 **401** 반환 |
 
 Redis 조회나 로그아웃 토큰 등록이 실패하면 503을 반환한다. 로그아웃 상태를 확인하거나 기록하지 못한 요청을 성공으로 처리하지 않는다.
 
@@ -319,7 +325,7 @@ JWT sub
 
 ## 7. 토큰 만료 시 클라이언트 처리
 
-Access Token 만료(1시간) 또는 무효 토큰 시 서버는 **401**을 반환한다. Refresh Token이 없으므로 **재로그인**이 필요하다.
+Access Token 만료(1시간) 시 서버는 **401**을 반환한다. 클라이언트는 저장된 Refresh Token으로 `POST /api/auth/refresh`를 한 번 호출하고, 성공하면 새 토큰 쌍으로 원 요청을 한 번 재시도한다.
 
 ### 서버 응답
 
@@ -337,28 +343,28 @@ Access Token 만료(1시간) 또는 무효 토큰 시 서버는 **401**을 반�
 flowchart TD
   A[API 요청] --> B{응답 상태}
   B -->|200/201| C[정상 처리]
-  B -->|401| D[로컬 access_token 삭제]
-  D --> E[로그인 화면으로 이동]
-  E --> F[POST /api/auth/login]
-  F --> G[새 access_token 저장]
-  G --> H[원래 화면 또는 홈으로 복귀]
+  B -->|401| D[POST /api/auth/refresh]
+  D -->|성공| E[회전된 토큰 저장]
+  E --> F[원 요청 1회 재시도]
+  D -->|실패| G[토큰 삭제와 cookie 제거]
+  G --> H[로그인 화면으로 이동]
   B -->|403| I[권한 없음 UI 표시]
 ```
 
 | 단계 | 클라이언트 동작 |
 | --- | --- |
 | 1 | API 응답 **401** 수신 |
-| 2 | 저장된 `access_token` 삭제 (localStorage / secure storage) |
-| 3 | 사용자에게 세션 만료 안내 |
-| 4 | 로그인 화면으로 리다이렉트 |
-| 5 | `POST /api/auth/login`으로 재인증 |
-| 6 | 새 토큰 저장 후 이전 작업 재시도(선택) |
+| 2 | `POST /api/auth/refresh`에 Refresh Token 전달 |
+| 3 | 성공 시 회전된 토큰 쌍 저장 |
+| 4 | 원 요청을 한 번 재시도 |
+| 5 | 갱신 실패 시 토큰 삭제와 cookie 제거 |
+| 6 | 사용자에게 세션 만료를 안내하고 로그인 화면으로 이동 |
 
 ### 401 vs 403 구분
 
 | 상태 | 의미 | 클라이언트 처리 |
 | --- | --- | --- |
-| **401** | 미인증·만료·로그아웃된 토큰 | 토큰 삭제 → **재로그인** |
+| **401** | 미인증·만료·로그아웃된 Access Token | 갱신 1회, 실패 시 **재로그인** |
 | **403** | 인증됐으나 권한 없음 | 재로그인 불필요, 권한 안내 UI |
 
 ---
@@ -369,6 +375,9 @@ flowchart TD
 | --- | --- |
 | `JWT_SECRET` | JWT 서명 비밀키 |
 | `JWT_EXPIRES_IN` | 예시 값 `1h` — Access Token 만료 (미설정 시 코드 기본값도 `1h`) |
+| `REFRESH_TOKEN_TTL_DAYS` | Refresh Token 만료 일수, 기본 30 |
+| `REFRESH_COOKIE_SAME_SITE` | Refresh cookie SameSite, 기본 `lax` |
+| `REFRESH_COOKIE_DOMAIN` | 운영 cookie domain, 미설정 시 host-only |
 | `REDIS_URL` | 블랙리스트 저장용 Redis 연결 |
 
 ---
@@ -379,5 +388,7 @@ flowchart TD
 - [✅] `backend/src/controllers/groupsController.js` — JWT `sub`로 `group_members` 조회 및 `group_role` 검증 (별도 `groupAuth.js` 미들웨어 없음)
 - [✅] 세션·리포트·공유 컨트롤러 — `sessions.user_id`와 JWT `sub` 일치 검증 (별도 `sessionOwner.js` 미들웨어 없음)
 - [✅] `POST /api/auth/logout` — Redis `SET blacklist:{hash} EX ttl`
+- [✅] `POST /api/auth/refresh` — Refresh Token 회전과 재사용 family 폐기
+- [✅] 로그아웃 시 Refresh Token family 폐기
 - [✅] 보호 라우트 전체에 auth 미들웨어 적용
-- [ ] Phase 4에서 그룹 권한·세션 소유자 우회 시나리오 통합 검증
+- [✅] Phase 4 그룹 권한·세션 소유자 우회 시나리오 통합 검증

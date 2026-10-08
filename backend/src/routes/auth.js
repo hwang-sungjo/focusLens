@@ -35,7 +35,33 @@ router.post(
   authController.login,
 );
 
+// POST /api/auth/refresh — 회전형 Refresh Token 갱신
+router.post(
+  '/refresh',
+  [
+    body('refresh_token')
+      .optional()
+      .isString()
+      .isLength({ min: 32, max: 512 })
+      .withMessage('refresh_token 형식이 올바르지 않습니다.'),
+  ],
+  validate,
+  authController.refresh,
+);
+
 // POST /api/auth/logout  (보호 라우트)
-router.post('/logout', authenticate, authController.logout);
+router.post(
+  '/logout',
+  authenticate,
+  [
+    body('refresh_token')
+      .optional()
+      .isString()
+      .isLength({ min: 32, max: 512 })
+      .withMessage('refresh_token 형식이 올바르지 않습니다.'),
+  ],
+  validate,
+  authController.logout,
+);
 
 module.exports = router;

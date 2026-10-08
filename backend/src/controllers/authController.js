@@ -3,6 +3,14 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const prisma = require('../models/prismaClient');
 const { blacklistToken } = require('../services/redis');
+const {
+  clearRefreshCookie,
+  getRefreshTokenFromRequest,
+  issueRefreshToken,
+  revokeRefreshTokensForLogout,
+  rotateRefreshToken,
+  setRefreshCookie,
+} = require('../services/refreshTokens');
 
 const SALT_ROUNDS = 12;
 
@@ -39,24 +47,29 @@ const register = async (req, res, next) => {
 
     const password_hash = await bcrypt.hash(password, SALT_ROUNDS);
 
-    const user = await prisma.users.create({
-      data: {
-        email,
-        password_hash,
-        name,
-        // 가입 시 user_profiles, user_privacy_settings 기본값 자동 생성
-        user_profile: { create: { nickname } },
-        user_privacy_settings: {
-          create: {
-            default_session_scope: 'PRIVATE',
-            ranking_participation: false,
+    const { user, refreshToken } = await prisma.$transaction(async (tx) => {
+      const createdUser = await tx.users.create({
+        data: {
+          email,
+          password_hash,
+          name,
+          // 가입 시 user_profiles, user_privacy_settings 기본값 자동 생성
+          user_profile: { create: { nickname } },
+          user_privacy_settings: {
+            create: {
+              default_session_scope: 'PRIVATE',
+              ranking_participation: false,
+            },
           },
         },
-      },
-      select: { id: true, email: true, name: true, role: true, created_at: true },
+        select: { id: true, email: true, name: true, role: true, created_at: true },
+      });
+      const issuedRefreshToken = await issueRefreshToken(createdUser.id, tx);
+      return { user: createdUser, refreshToken: issuedRefreshToken.rawToken };
     });
 
     const { accessToken, expiresIn } = issueAccessToken(user);
+    setRefreshCookie(res, refreshToken);
 
     return res.status(201).json({
       success: true,
@@ -66,6 +79,7 @@ const register = async (req, res, next) => {
         name: user.name,
         access_token: accessToken,
         expires_in: expiresIn,
+        refresh_token: refreshToken,
       },
       error: '',
     });
@@ -94,6 +108,8 @@ const login = async (req, res, next) => {
     }
 
     const { accessToken, expiresIn } = issueAccessToken(user);
+    const { rawToken: refreshToken } = await issueRefreshToken(user.id);
+    setRefreshCookie(res, refreshToken);
 
     return res.status(200).json({
       success: true,
@@ -103,6 +119,7 @@ const login = async (req, res, next) => {
         name: user.name,
         access_token: accessToken,
         expires_in: expiresIn,
+        refresh_token: refreshToken,
       },
       error: '',
     });
@@ -115,11 +132,13 @@ const login = async (req, res, next) => {
 const logout = async (req, res, next) => {
   try {
     const { token, user } = req;
+    await revokeRefreshTokensForLogout(user.sub, getRefreshTokenFromRequest(req));
     // JWT 남은 유효 기간만큼 Redis 블랙리스트에 등록
     const remaining = user.exp - Math.floor(Date.now() / 1000);
     if (remaining > 0) {
       await blacklistToken(token, remaining);
     }
+    clearRefreshCookie(res);
     return res.status(200).json({
       success: true,
       data: { message: '로그아웃되었습니다.' },
@@ -134,4 +153,42 @@ const logout = async (req, res, next) => {
   }
 };
 
-module.exports = { register, login, logout };
+/** POST /api/auth/refresh */
+const refresh = async (req, res, next) => {
+  try {
+    const currentToken = getRefreshTokenFromRequest(req);
+    if (!currentToken) {
+      return res.status(401).json({
+        success: false,
+        data: {},
+        error: 'Refresh Token이 필요합니다.',
+      });
+    }
+
+    const result = await rotateRefreshToken(currentToken);
+    if (result.status !== 'ROTATED') {
+      clearRefreshCookie(res);
+      return res.status(401).json({
+        success: false,
+        data: {},
+        error: '유효하지 않은 Refresh Token입니다.',
+      });
+    }
+
+    const { accessToken, expiresIn } = issueAccessToken(result.user);
+    setRefreshCookie(res, result.rawToken);
+    return res.status(200).json({
+      success: true,
+      data: {
+        access_token: accessToken,
+        expires_in: expiresIn,
+        refresh_token: result.rawToken,
+      },
+      error: '',
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = { register, login, logout, refresh };

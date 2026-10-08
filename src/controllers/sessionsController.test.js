@@ -421,3 +421,152 @@ describe('concentration log idempotency', () => {
     );
   });
 });
+
+describe('concentration log v2 measurement identity', () => {
+  const startedAt = new Date('2026-10-06T00:00:00.000Z');
+  const measuredAt = new Date('2026-10-06T00:01:00.000Z');
+  const receivedAt = new Date('2026-10-06T00:02:00.000Z');
+  const clientLogId = '123e4567-e89b-42d3-a456-426614174000';
+  const session = {
+    id: 'session-id',
+    user_id: 'user-id',
+    started_at: startedAt,
+    status: 'IN_PROGRESS',
+  };
+  const payload = {
+    client_log_id: clientLogId,
+    measured_at: measuredAt.toISOString(),
+    gaze: 80,
+    blink: 70,
+    head: 90,
+    total: 80,
+    face_detected: true,
+  };
+  const storedLog = {
+    id: 'v2-log-id',
+    minute_index: 1,
+    logged_at: receivedAt,
+    client_log_id: clientLogId,
+    measured_at: measuredAt,
+    gaze_score: 80,
+    blink_score: 70,
+    head_score: 90,
+    focus_score: 80,
+    attention_state: 'FOCUSED',
+    face_detected: true,
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.useFakeTimers().setSystemTime(receivedAt);
+    prisma.$transaction.mockImplementation((operation) => operation(prisma));
+    prisma.sessions.findUnique.mockResolvedValue(session);
+    prisma.concentration_logs.findUnique.mockResolvedValue(null);
+    prisma.concentration_logs.create.mockResolvedValue(storedLog);
+  });
+
+  afterEach(() => jest.useRealTimers());
+
+  const sendLog = async (body = payload) => {
+    const req = { user: { sub: 'user-id' }, params: { id: 'session-id' }, body };
+    const res = createResponse();
+    const next = jest.fn();
+    await sessionsController.logConcentrationV2(req, res, next);
+    return { res, next };
+  };
+
+  it('stores the original measurement time and client log identity', async () => {
+    const { res, next } = await sendLog();
+
+    expect(next).not.toHaveBeenCalled();
+    expect(prisma.concentration_logs.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          session_id: 'session-id',
+          minute_index: 1,
+          logged_at: receivedAt,
+          client_log_id: clientLogId,
+          measured_at: measuredAt,
+        }),
+      }),
+    );
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: {
+        log_id: 'v2-log-id',
+        minute_index: 1,
+        logged_at: receivedAt,
+        focus_score: 80,
+        attention_state: 'FOCUSED',
+        face_detected: true,
+        client_log_id: clientLogId,
+        measured_at: measuredAt,
+      },
+      error: '',
+    });
+  });
+
+  it('returns the existing row when the same client ID and payload are retried', async () => {
+    prisma.concentration_logs.findUnique.mockResolvedValueOnce(storedLog);
+
+    const { res, next } = await sendLog();
+
+    expect(next).not.toHaveBeenCalled();
+    expect(prisma.concentration_logs.create).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('returns 409 when the same client ID is reused with different content', async () => {
+    prisma.concentration_logs.findUnique.mockResolvedValueOnce({ ...storedLog, gaze_score: 79 });
+
+    const { res, next } = await sendLog();
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledWith(
+      expect.objectContaining({ statusCode: 409, message: '같은 client_log_id에 다른 로그가 이미 존재합니다.' }),
+    );
+  });
+
+  it('returns 409 when another client ID already occupies the measured minute', async () => {
+    prisma.concentration_logs.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ ...storedLog, client_log_id: '987e4567-e89b-42d3-a456-426614174000' });
+
+    const { res, next } = await sendLog();
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledWith(
+      expect.objectContaining({ statusCode: 409, message: '같은 분 구간에 다른 로그가 이미 존재합니다.' }),
+    );
+  });
+
+  it('rejects a measurement more than five minutes in the future', async () => {
+    const { res, next } = await sendLog({
+      ...payload,
+      measured_at: new Date(receivedAt.getTime() + 5 * 60_000 + 1).toISOString(),
+    });
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledWith(
+      expect.objectContaining({
+        statusCode: 400,
+        message: 'measured_at은 서버 시각보다 5분을 초과해 미래일 수 없습니다.',
+      }),
+    );
+  });
+
+  it('rejects a measurement before the first completed session minute', async () => {
+    const { res, next } = await sendLog({
+      ...payload,
+      measured_at: new Date(startedAt.getTime() + 59_999).toISOString(),
+    });
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect(prisma.concentration_logs.create).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledWith(
+      expect.objectContaining({ statusCode: 400, message: '첫 1분 측정 구간이 아직 완료되지 않았습니다.' }),
+    );
+  });
+});

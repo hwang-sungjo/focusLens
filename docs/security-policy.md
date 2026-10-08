@@ -4,7 +4,7 @@
 > **응답 형식**: `{ success: false, data: {}, error: "..." }`
 > **공통 원칙**: 실패 원인에 따라 **400 / 401 / 403 / 404 / 409 / 503**을 구분한다. Phase 4-5에서 요청 ID 기반 구조화 로그와 실패 카운터를 구현했다.
 
-> **현재 로그 API 구현**: `backend/src/routes/sessions.js`에서 점수와 필수 `face_detected`를 검증한다. `backend/src/controllers/sessionsController.js`는 소유권·세션 상태·가중 합산값·얼굴 미검출 0점 규칙을 검사하고, 서버가 계산한 분 구간을 DB UNIQUE 제약과 Serializable 트랜잭션으로 멱등 저장한다.
+> **현재 로그 API 구현**: v1 `backend/src/routes/sessions.js`와 v2 `backend/src/routes/v2Sessions.js`에서 점수와 필수 `face_detected`를 검증한다. `backend/src/controllers/sessionsController.js`는 소유권·세션 상태·가중 합산값·얼굴 미검출 0점 규칙을 검사한다. v1은 서버 수신 시각, v2는 `measured_at`으로 분 구간을 계산해 DB UNIQUE 제약과 Serializable 트랜잭션으로 멱등 저장한다.
 
 ---
 
@@ -12,9 +12,9 @@
 
 | # | 검증 항목 | 주요 대상 API | 실패 코드 |
 | --- | --- | --- | --- |
-| ① | gaze/blink/head/total: 0~100 float | `POST /api/sessions/:id/log` | **400** |
+| ① | gaze/blink/head/total: 0~100 float | v1·v2 로그 API | **400** |
 | ② | session_id 소유자 = JWT `sub` | 세션·리포트·로그 API | **403** |
-| ③ | 분 구간 멱등 저장과 내용 충돌 차단 | `POST /api/sessions/:id/log` | **409** |
+| ③ | 분 구간·client ID 멱등 저장과 내용 충돌 차단 | v1·v2 로그 API | **409** |
 | ④ | HTTPS 전송 강제 | 전체 API (배포 환경) | **301** / 연결 거부 |
 | ⑤ | `group_members.group_role` 권한 | 그룹 API 전반 | **403** |
 | ⑥ | `default_session_scope` 초과 공개 차단 | `POST /api/session-shares`, `GET /api/session-shares/feed` | **403** |
@@ -34,19 +34,19 @@
 요청
   → [④ HTTPS] (배포 시 인프라 구성)
   → [auth] JWT 검증 (401)
-  → [sessions route] ① 점수·face_detected 검증 (400) — 로그 라우트
+  → [sessions/v2Sessions route] ① 점수·face_detected·v2 식별자 검증 (400)
   → [sessions controller] ② 소유자·상태·total·미검출 0점 검증 (403/409/400)
-  → [sessions controller] 서버 수신 시각으로 minute_index 계산 (400)
-  → [PostgreSQL] ③ (session_id, minute_index) UNIQUE와 Serializable 트랜잭션
+  → [sessions controller] v1 수신 시각 또는 v2 measured_at으로 minute_index 계산 (400)
+  → [PostgreSQL] ③ 분 구간·client ID UNIQUE와 Serializable 트랜잭션
   → [controller] 동일 내용 200 / 다른 내용 409
 ```
 
 | 레이어 | 현재 파일 | 담당 정책 |
 | --- | --- | --- |
 | 미들웨어 | `backend/src/middleware/auth.js` | JWT (선행 조건) |
-| 라우트 | `backend/src/routes/sessions.js` | ① 점수·`face_detected` 형식 |
+| 라우트 | `backend/src/routes/sessions.js`, `v2Sessions.js` | ① 점수·`face_detected`, v2 ID·시각 형식 |
 | 컨트롤러 | `backend/src/controllers/sessionsController.js` | ② 소유권·상태, ① 점수 규칙, ③ 분 구간 계산·멱등 판정 |
-| 데이터베이스 | `concentration_logs` UNIQUE 제약 | ③ 동시 요청을 포함한 구간당 한 행 보장 |
+| 데이터베이스 | `concentration_logs` UNIQUE 제약 | ③ 동시 요청을 포함한 구간·client ID당 한 행 보장 |
 
 ④ HTTPS 배포 구성과 ⑤·⑥ 정책은 각 절 및 `docs/backend-plan.md`의 별도 구현·검증 범위를 따른다.
 
@@ -61,7 +61,7 @@ ERD: `concentration_logs` — `gaze_score`, `blink_score`, `head_score`, `focus_
 | 항목 | 내용 |
 | --- | --- |
 | **검증 위치** | `backend/src/routes/sessions.js` 입력 검증 + `backend/src/controllers/sessionsController.js`의 가중 합산값 확인 |
-| **적용 라우트** | `POST /api/sessions/:id/log` |
+| **적용 라우트** | `POST /api/sessions/:id/log`, `POST /api/v2/sessions/:id/log` |
 | **실패 응답** | **400** — `"gaze, blink, head, total은 0~100 범위의 float여야 합니다"` |
 
 **현행 구현**
@@ -80,7 +80,7 @@ ERD: `sessions.user_id`(FK) — 세션 소유자. JWT `sub` = `users.id`.
 | 항목 | 내용 |
 | --- | --- |
 | **검증 위치** | `backend/src/controllers/sessionsController.js`, `reportsController.js`, `sessionSharesController.js` |
-| **적용 라우트** | `POST /api/sessions/:id/log`, `POST /api/sessions/:id/end`, `GET /api/sessions/:id`, `GET /api/reports/:session_id`, `POST /api/session-shares` (body `session_id`) |
+| **적용 라우트** | v1·v2 로그, `POST /api/sessions/:id/end`, `GET /api/sessions/:id`, `GET /api/reports/:session_id`, `POST /api/session-shares` (body `session_id`) |
 | **실패 응답** | **403** — `"해당 세션에 대한 권한이 없습니다"` |
 | **세션 없음** | **404** — `"세션을 찾을 수 없습니다"` |
 
@@ -96,24 +96,26 @@ ERD: `sessions.user_id`(FK) — 세션 소유자. JWT `sub` = `users.id`.
 
 ### ③ 분 구간 멱등 저장과 내용 충돌 차단
 
-ERD: `concentration_logs` — **UNIQUE(`session_id`, `minute_index`)**
+ERD: `concentration_logs` — **UNIQUE(`session_id`, `minute_index`)**, **UNIQUE(`session_id`, `client_log_id`)**
 
 | 항목 | 내용 |
 | --- | --- |
 | **검증 위치** | 세션 컨트롤러 + PostgreSQL UNIQUE 제약 |
-| **적용 라우트** | `POST /api/sessions/:id/log` |
+| **적용 라우트** | `POST /api/sessions/:id/log`, `POST /api/v2/sessions/:id/log` |
 | **동일 내용** | **200** — 기존 로그의 동일한 `log_id` 반환 |
 | **다른 내용** | **409** — `"같은 분 구간에 다른 로그가 이미 존재합니다"` |
-| **DB 제약** | `(session_id, minute_index)` UNIQUE + `minute_index >= 1` CHECK |
+| **DB 제약** | `(session_id, minute_index)` UNIQUE + `(session_id, client_log_id)` UNIQUE + `minute_index >= 1` CHECK |
 
 **현행 구현**
 
-1. `minute_index = floor((서버 수신 시각 - sessions.started_at) / 60초)`로 계산한다. 경과 시간이 60초 미만이면 400을 반환한다.
+1. v1은 서버 수신 시각, v2는 `measured_at`을 사용해 `minute_index = floor((기준 시각 - sessions.started_at) / 60초)`로 계산한다. 경과 시간이 60초 미만이면 400을 반환한다.
 2. 기존 행이 있으면 소수 둘째 자리로 정규화한 `gaze`, `blink`, `head`, 서버 계산 `total`, `face_detected`를 비교한다.
 3. 동일 내용은 기존 행을 반환하고 다른 내용은 409를 반환한다.
 4. 동시 INSERT는 DB UNIQUE 제약이 한 건만 허용한다. 동일 내용으로 충돌한 요청은 생성된 행을 조회해 200을 반환한다.
 5. 로그 저장과 세션 종료는 Serializable 트랜잭션으로 실행하고 직렬화 충돌을 재시도한다. 재시도 시 세션이 종료됐으면 409를 반환한다.
-6. `logged_at`은 최초 저장 요청의 서버 수신 시각이다. 현재 요청에는 원래 측정 시각과 클라이언트 요청 ID가 없으므로 한 구간 이상 지연된 재전송의 원래 구간은 복원할 수 없다.
+6. v1의 `logged_at`은 최초 저장 요청의 서버 수신 시각이며 지연 전의 원래 구간은 복원하지 못한다.
+7. v2는 UUID v4 `client_log_id`와 UTC `measured_at`을 필수로 받고 원래 분 구간을 복원한다.
+8. 동일 v2 ID·정규화 payload는 200, 같은 ID의 다른 payload나 같은 분의 다른 ID는 409다.
 
 ---
 

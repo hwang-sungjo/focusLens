@@ -144,6 +144,7 @@ model users {
   groups_created            groups[]                   @relation("group_creator")
   group_members             group_members[]
   group_invitations_invitee group_invitations[]        @relation("invitation_invitee")
+  refresh_tokens            refresh_tokens[]
 
   @@map("users")
 }
@@ -207,6 +208,8 @@ model concentration_logs {
   session_id      String
   minute_index    Int
   logged_at       DateTime
+  client_log_id   String?
+  measured_at     DateTime?
   // DB CHECK + 미들웨어: gaze_score BETWEEN 0 AND 100
   gaze_score      Float
   // DB CHECK + 미들웨어: blink_score BETWEEN 0 AND 100
@@ -223,8 +226,30 @@ model concentration_logs {
   session sessions @relation(fields: [session_id], references: [id], onDelete: Cascade)
 
   @@unique([session_id, minute_index])
+  @@unique([session_id, client_log_id])
   @@index([session_id, logged_at])
   @@map("concentration_logs")
+}
+
+model refresh_tokens {
+  id                   String    @id @default(uuid())
+  user_id              String
+  token_hash           String    @unique
+  family_id            String
+  expires_at           DateTime
+  used_at              DateTime?
+  revoked_at           DateTime?
+  replaced_by_token_id String?
+  created_at           DateTime  @default(now())
+  updated_at           DateTime  @updatedAt
+
+  user              users            @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  replaced_by_token refresh_tokens?  @relation("refresh_rotation", fields: [replaced_by_token_id], references: [id], onDelete: SetNull)
+  previous_tokens   refresh_tokens[] @relation("refresh_rotation")
+
+  @@index([user_id, expires_at])
+  @@index([family_id])
+  @@map("refresh_tokens")
 }
 
 model hourly_stats {

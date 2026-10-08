@@ -6,6 +6,7 @@ const YAML = require('yaml');
 const mounts = [
   ['/api/auth', require('../src/routes/auth')],
   ['/api/sessions', require('../src/routes/sessions')],
+  ['/api/v2/sessions', require('../src/routes/v2Sessions')],
   ['/api/reports', require('../src/routes/reports')],
   ['/api/users', require('../src/routes/users')],
   ['/api/connections', require('../src/routes/connections')],

@@ -9,6 +9,7 @@ jest.mock('jsonwebtoken', () => ({
 }), { virtual: true });
 
 jest.mock('../../backend/src/models/prismaClient', () => ({
+  $transaction: jest.fn(),
   users: {
     findUnique: jest.fn(),
     create: jest.fn(),
@@ -22,10 +23,20 @@ jest.mock('../../backend/src/services/redis', () => ({
   blacklistToken: jest.fn(),
 }));
 
+jest.mock('../../backend/src/services/refreshTokens', () => ({
+  clearRefreshCookie: jest.fn(),
+  getRefreshTokenFromRequest: jest.fn(),
+  issueRefreshToken: jest.fn(),
+  revokeRefreshTokensForLogout: jest.fn(),
+  rotateRefreshToken: jest.fn(),
+  setRefreshCookie: jest.fn(),
+}));
+
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const prisma = require('../../backend/src/models/prismaClient');
 const { blacklistToken } = require('../../backend/src/services/redis');
+const refreshTokens = require('../../backend/src/services/refreshTokens');
 const authController = require('../../backend/src/controllers/authController');
 
 const createResponse = () => {
@@ -59,10 +70,15 @@ describe('authentication controller', () => {
     process.env.JWT_EXPIRES_IN = '1h';
     jwt.sign.mockReturnValue('issued-access-token');
     jwt.decode.mockReturnValue({ iat: 100, exp: 3700 });
+    prisma.$transaction.mockImplementation((operation) => operation(prisma));
     prisma.users.findUnique.mockResolvedValue(null);
     prisma.user_profiles.findUnique.mockResolvedValue(null);
     bcrypt.hash.mockResolvedValue('new-password-hash');
     bcrypt.compare.mockResolvedValue(true);
+    refreshTokens.issueRefreshToken.mockResolvedValue({ rawToken: 'issued-refresh-token' });
+    refreshTokens.getRefreshTokenFromRequest.mockReturnValue(null);
+    refreshTokens.revokeRefreshTokensForLogout.mockResolvedValue();
+    refreshTokens.rotateRefreshToken.mockResolvedValue({ status: 'INVALID' });
   });
 
   it('registers a user with hashed credentials and never returns the password hash', async () => {
@@ -89,6 +105,8 @@ describe('authentication controller', () => {
     const response = res.json.mock.calls[0][0];
     expect(res.status).toHaveBeenCalledWith(201);
     expect(response.data.access_token).toBe('issued-access-token');
+    expect(response.data.refresh_token).toBe('issued-refresh-token');
+    expect(refreshTokens.setRefreshCookie).toHaveBeenCalledWith(res, 'issued-refresh-token');
     expect(JSON.stringify(response)).not.toContain('password_hash');
     expect(JSON.stringify(response)).not.toContain('new-password-hash');
   });
@@ -102,6 +120,7 @@ describe('authentication controller', () => {
     expect(next).not.toHaveBeenCalled();
     expect(bcrypt.compare).toHaveBeenCalledWith('password123', 'stored-password-hash');
     expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json.mock.calls[0][0].data.refresh_token).toBe('issued-refresh-token');
     expect(JSON.stringify(res.json.mock.calls[0][0])).not.toContain('password_hash');
   });
 
@@ -147,8 +166,56 @@ describe('authentication controller', () => {
 
     expect(next).not.toHaveBeenCalled();
     expect(blacklistToken).toHaveBeenCalledWith('access-token', 300);
+    expect(refreshTokens.revokeRefreshTokensForLogout).toHaveBeenCalledWith('user-id', null);
     expect(res.status).toHaveBeenCalledWith(200);
     Date.now.mockRestore();
+  });
+
+  it('rotates a valid refresh token and returns a new access token pair', async () => {
+    refreshTokens.getRefreshTokenFromRequest.mockReturnValue('current-refresh-token');
+    refreshTokens.rotateRefreshToken.mockResolvedValue({
+      status: 'ROTATED',
+      rawToken: 'next-refresh-token',
+      user: activeUser,
+    });
+
+    const { res, next } = await call(authController.refresh, {
+      body: { refresh_token: 'current-refresh-token' },
+      headers: {},
+    });
+
+    expect(next).not.toHaveBeenCalled();
+    expect(refreshTokens.rotateRefreshToken).toHaveBeenCalledWith('current-refresh-token');
+    expect(refreshTokens.setRefreshCookie).toHaveBeenCalledWith(res, 'next-refresh-token');
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: {
+        access_token: 'issued-access-token',
+        expires_in: 3600,
+        refresh_token: 'next-refresh-token',
+      },
+      error: '',
+    });
+  });
+
+  it('returns 401 and clears the cookie for a reused refresh token', async () => {
+    refreshTokens.getRefreshTokenFromRequest.mockReturnValue('reused-refresh-token');
+    refreshTokens.rotateRefreshToken.mockResolvedValue({ status: 'REUSED' });
+
+    const { res, next } = await call(authController.refresh, {
+      body: { refresh_token: 'reused-refresh-token' },
+      headers: {},
+    });
+
+    expect(next).not.toHaveBeenCalled();
+    expect(refreshTokens.clearRefreshCookie).toHaveBeenCalledWith(res);
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      data: {},
+      error: '유효하지 않은 Refresh Token입니다.',
+    });
   });
 
   it('fails closed with 503 when logout cannot update the blacklist', async () => {

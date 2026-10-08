@@ -2,7 +2,7 @@
 
 세션 기록 공유, 공감 기능, 온라인 네트워킹, 그룹 및 관리자 관리 시스템을 반영한 최종 ERD입니다.
 
-**구현 상태 (2026-10-06):** 16개 도메인 테이블과 `hourly_stats`, `daily_stats`, `weekly_stats`를 합친 Prisma 모델 19개가 스키마와 마이그레이션에 정의돼 있다. `prisma/views.sql`과 마이그레이션에는 조회 View 5개가 있으며 Materialized View는 없다. 목록·피드·랭킹·그룹 조회용 복합·부분 인덱스는 Phase 4-5 마이그레이션에 반영됐다. AI의 프레임 측정값은 아직 자동으로 `concentration_logs`에 전송되지 않는다.
+**구현 상태 (2026-10-06):** 16개 기존 도메인 테이블, `hourly_stats`, `daily_stats`, `weekly_stats`, `refresh_tokens`를 합친 Prisma 모델 20개가 스키마와 마이그레이션에 정의돼 있다. `prisma/views.sql`과 마이그레이션에는 조회 View 5개가 있으며 Materialized View는 없다. 로그 v2용 `client_log_id`, `measured_at`과 회전형 Refresh Token 저장 구조도 반영됐다. AI의 프레임 측정값은 아직 자동으로 `concentration_logs`에 전송되지 않는다.
 
 ---
 
@@ -42,13 +42,14 @@
 | user_profiles | id(PK), user_id(FK, UNIQUE), nickname, profile_image_url, bio, created_at, updated_at | 네트워킹 공개 프로필 |
 | user_privacy_settings | id(PK), user_id(FK, UNIQUE), default_session_scope, score_visibility, study_time_visibility, group_data_sharing, ranking_participation, created_at, updated_at | 학습 데이터 공개 범위 설정 |
 | sessions | id(PK), user_id(FK), started_at, ended_at, status, created_at, updated_at | 사용자 학습 세션 원본 기록 |
-| concentration_logs | id(PK), session_id(FK), minute_index, logged_at, gaze_score, blink_score, head_score, focus_score, attention_state, face_detected, created_at | 서버가 구분한 분 단위 집중도 타임라인 기록 |
+| concentration_logs | id(PK), session_id(FK), minute_index, logged_at, client_log_id(NULL), measured_at(NULL), 점수 4개, attention_state, face_detected, created_at | v1 서버 구간과 v2 클라이언트 측정 구간을 함께 지원하는 집중도 기록 |
+| refresh_tokens | id(PK), user_id(FK), token_hash, family_id, expires_at, used_at, revoked_at, replaced_by_token_id(FK), created_at, updated_at | 회전형 Refresh Token 해시와 재사용 탐지 상태 |
 | hourly_stats | id(PK), session_id(FK), bucket_start, 점수 평균 4개, log_count, 상태별 건수, face_not_detected_count | 30일 초과 원본의 UTC 시간 집계 |
 | daily_stats | id(PK), session_id(FK), bucket_start, 점수 평균 4개, log_count, 상태별 건수, face_not_detected_count | 90일 초과 시간 집계의 UTC 일 집계 |
 | weekly_stats | id(PK), session_id(FK), bucket_start, 점수 평균 4개, log_count, 상태별 건수, face_not_detected_count | 365일 초과 일 집계의 UTC 주 집계 |
 | reports | id(PK), session_id(FK, UNIQUE), summary_json, created_at | 세션 종료 후 생성되는 리포트 산출물 |
 
-AI 경계 (2026-09-22): `ai/`의 Python·MediaPipe 프로그램은 현재 프레임별 얼굴 검출, 시선·눈 깜빡임·머리 자세 특징을 추출하지만 웹캠 파이프라인에서 백엔드로 자동 전송하지 않는다. 프레임 원본·랜드마크·보정값을 저장하는 테이블은 이 ERD에 없다. 후속 1분 집계 결과만 `POST /api/sessions/:id/log`를 거쳐 `concentration_logs`에 저장하는 설계이며, 1분 집계 자체는 아직 미구현이다.
+AI 경계 (2026-10-06): `ai/`의 Python·MediaPipe 프로그램은 현재 프레임별 특징을 추출하지만 웹캠 파이프라인에서 백엔드로 자동 전송하지 않는다. 프레임 원본·랜드마크·보정값은 저장하지 않는다. 후속 1분 집계 결과는 `POST /api/v2/sessions/:id/log`의 `client_log_id`, `measured_at`과 함께 `concentration_logs`에 저장한다.
 
 ### 소셜 도메인
 
@@ -79,7 +80,8 @@ AI 경계 (2026-09-22): `ai/`의 Python·MediaPipe 프로그램은 현재 프레
 | users - user_profiles | 1 : 1 | user_profiles.user_id UNIQUE |
 | users - user_privacy_settings | 1 : 1 | user_privacy_settings.user_id UNIQUE |
 | users - sessions | 1 : N | 사용자 1명은 여러 학습 세션을 생성 |
-| sessions - concentration_logs | 1 : N | UNIQUE(session_id, minute_index) |
+| users - refresh_tokens | 1 : N | 원문 없이 SHA-256 해시만 저장하고 family 단위 폐기 |
+| sessions - concentration_logs | 1 : N | UNIQUE(session_id, minute_index), UNIQUE(session_id, client_log_id) |
 | sessions - hourly_stats/daily_stats/weekly_stats | 1 : N | 각 tier에 UNIQUE(session_id, bucket_start) |
 | sessions - reports | 1 : 1 | 완료 세션 1개는 리포트 1개 생성. reports.session_id UNIQUE |
 | sessions - session_shares | 1 : N | 세션은 공개 범위별로 공유 가능. 동일 scope 중복 공유 방지 필요 |
@@ -100,7 +102,8 @@ AI 경계 (2026-09-22): `ai/`의 Python·MediaPipe 프로그램은 현재 프레
 | users | UNIQUE(email) |
 | user_profiles | UNIQUE(user_id), UNIQUE(nickname) |
 | user_privacy_settings | UNIQUE(user_id) |
-| concentration_logs | UNIQUE(session_id, minute_index), CHECK(minute_index >= 1), CHECK(score BETWEEN 0 AND 100) |
+| concentration_logs | UNIQUE(session_id, minute_index), UNIQUE(session_id, client_log_id), CHECK(minute_index >= 1), CHECK(score BETWEEN 0 AND 100) |
+| refresh_tokens | UNIQUE(token_hash), INDEX(user_id, expires_at), INDEX(family_id) |
 | hourly_stats, daily_stats, weekly_stats | UNIQUE(session_id, bucket_start), CHECK(score BETWEEN 0 AND 100), CHECK(상태 건수 합 = log_count) |
 | reports | UNIQUE(session_id) |
 | user_connection_requests | CHECK(requester_user_id <> receiver_user_id) |

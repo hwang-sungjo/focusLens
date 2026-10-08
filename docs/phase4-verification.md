@@ -52,9 +52,10 @@ PostgreSQL 16의 빈 `focuslens_phase4_empty` DB에 저장소의 마이그레이
 
 ## 4. Phase 4 이후 외부 연동
 
+Phase 5를 제외한 외부 연동 분류와 우선순위는 `docs/integration-readiness.md`를 따른다.
+
 다음 항목은 백엔드 Phase 4 완료 범위 밖이며 준비되는 시점에 통합한다.
 
 - AI 카메라 측정, 사용자별 보정, 1분 집계 정확도
 - AI 오프라인 큐, 원래 측정 시각, 클라이언트 요청 ID, JWT 갱신
 - 제품 프런트엔드 로그인·세션·리포트 E2E와 브라우저 출력 이스케이프
-- AWS, HTTPS, CI/CD, 외부 로그·메트릭 수집과 알림, 백업 복원

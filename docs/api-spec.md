@@ -5,7 +5,7 @@
 > **인증 방식**: JWT Bearer Token (`Authorization: Bearer <access_token>`)  
 > **토큰 만료**: Access Token 1시간
 
-**구현 현황 (2026-10-06):** 아래 36개 API operation은 `backend/src/routes`에 구현돼 있으며 `docs/swagger.yaml`에 명세돼 있다. `npm run verify:openapi`으로 실제 Express 라우트와 명세의 일치를 검증한다. 인증은 Access Token만 지원하고 토큰 재발급 API는 없다. `GET /health`(DB·Redis 정상 시 200, 장애 시 503)와 `/api-docs`는 `/api` 밖의 백엔드 운영 경로다. 집중도 로그는 현재 AI 클라이언트의 다섯 필드 요청을 유지하고, 서버가 분 구간을 계산해 DB UNIQUE 제약으로 멱등 저장한다. Phase 4 최종 검증 결과는 `docs/phase4-verification.md`를 따른다.
+**구현 현황 (2026-10-06):** 아래 38개 API operation은 `backend/src/routes`에 구현돼 있으며 `docs/swagger.yaml`에 명세돼 있다. `npm run verify:openapi`으로 실제 Express 라우트와 명세의 일치를 검증한다. 인증은 1시간 Access Token과 30일 회전형 Refresh Token을 지원한다. `GET /health`(DB·Redis 정상 시 200, 장애 시 503)와 `/api-docs`는 `/api` 밖의 백엔드 운영 경로다. 집중도 로그 v1은 기존 AI 클라이언트의 다섯 필드를 유지하고, v2는 `client_log_id`와 `measured_at`으로 지연 재전송을 멱등 저장한다. Phase 4 최종 검증 결과는 `docs/phase4-verification.md`를 따른다.
 
 ---
 
@@ -69,7 +69,7 @@
 ### 1.4 집중도 점수 산정
 
 ```
-focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
+focus_score = (gaze × 0.3) + (blink × 0.5) + (head × 0.2)
 ```
 
 백엔드는 요청의 `total`이 위 계산값(소수 둘째 자리 반올림)과 0.01 이내로 일치하는지 확인하고 계산값을 저장한다. 현재 `ai/`에는 같은 가중치의 계산 함수와 API 클라이언트가 있지만, 1분 점수 집계와 실시간 전송 연결은 미구현이다.
@@ -123,7 +123,8 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
     "email": "user@example.com",
     "name": "홍길동",
     "access_token": "jwt",
-    "expires_in": 3600
+    "expires_in": 3600,
+    "refresh_token": "opaque-token"
   },
   "error": ""
 }
@@ -165,7 +166,8 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
   "data": {
     "user_id": "uuid",
     "access_token": "jwt",
-    "expires_in": 3600
+    "expires_in": 3600,
+    "refresh_token": "opaque-token"
   },
   "error": ""
 }
@@ -181,9 +183,55 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 
 ---
 
+### POST /api/auth/refresh
+
+Access Token을 재발급하고 Refresh Token을 회전한다. Refresh Token은 JSON body 또는 `focuslens_refresh_token` HttpOnly cookie로 전달할 수 있다. 서버는 원문 대신 SHA-256 해시만 저장하며, 이미 교체된 토큰이 재사용되면 같은 token family를 모두 폐기한다.
+
+| 항목 | 내용 |
+| --- | --- |
+| **Method** | `POST` |
+| **Path** | `/api/auth/refresh` |
+| **인증** | Access Token 불필요, Refresh Token 필요 |
+
+**Request Body**
+
+```json
+{
+  "refresh_token": "opaque-token"
+}
+```
+
+HttpOnly cookie를 사용하면 body는 생략할 수 있다.
+
+**Response `200`**
+
+```json
+{
+  "success": true,
+  "data": {
+    "access_token": "jwt",
+    "expires_in": 3600,
+    "refresh_token": "rotated-opaque-token"
+  },
+  "error": ""
+}
+```
+
+응답은 회전된 `focuslens_refresh_token` HttpOnly cookie도 설정한다. 운영 환경에서는 Secure가 활성화되며 기본 SameSite는 `lax`다.
+
+**에러 케이스**
+
+| 상태 | error 예시 |
+| --- | --- |
+| 400 | `refresh_token` 형식 오류 |
+| 401 | `"Refresh Token이 필요합니다."` |
+| 401 | `"유효하지 않은 Refresh Token입니다."` |
+
+---
+
 ### POST /api/auth/logout
 
-현재 access token을 Redis 블랙리스트에 등록하여 무효화한다.
+현재 Access Token을 Redis 블랙리스트에 등록하고 Refresh Token family를 폐기한다.
 
 | 항목 | 내용 |
 | --- | --- |
@@ -193,7 +241,7 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 
 **Request Body**
 
-없음
+선택적으로 `{ "refresh_token": "opaque-token" }`을 전달한다. 생략하면 해당 사용자의 활성 Refresh Token을 모두 폐기한다.
 
 **Response `200`**
 
@@ -268,6 +316,8 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 
 `minute_index = floor((서버 수신 시각 - sessions.started_at) / 60초)`이며 첫 완료 구간은 1이다. `logged_at`은 처음 저장에 성공한 서버 수신 시각이다. 요청에 원래 측정 시각이나 클라이언트 요청 ID가 없으므로 네트워크에서 한 구간 이상 지연된 재전송의 원래 구간은 백엔드만으로 복원할 수 없다.
 
+> v2도 별도 경로로 구현돼 있으며 v1은 기존 AI 클라이언트 호환을 위해 유지한다. 상세 결정은 `docs/client-contract-decisions.md`를 따른다.
+
 | 항목 | 내용 |
 | --- | --- |
 | **Method** | `POST` |
@@ -334,6 +384,58 @@ focus_score = (gaze × 0.4) + (blink × 0.3) + (head × 0.3)
 | 409 | `"종료된 세션에는 로그를 추가할 수 없습니다"` |
 
 같은 분 구간에 정규화된 다섯 값이 모두 같은 요청이 다시 오면 새 행을 만들지 않고 기존 `log_id`로 200을 반환한다. 동시 요청도 DB UNIQUE 제약과 Serializable 트랜잭션으로 같은 규칙을 적용한다.
+
+---
+
+### POST /api/v2/sessions/:id/log
+
+지연 전송에도 원래 측정 구간을 유지하는 로그 API다. `client_log_id`는 재시도 동안 동일하게 유지하며 `measured_at`은 완료된 60초 측정 구간의 UTC 종료 시각이다.
+
+| 항목 | 내용 |
+| --- | --- |
+| **Method** | `POST` |
+| **Path** | `/api/v2/sessions/:id/log` |
+| **인증** | **필요** |
+
+**Request Body**
+
+```json
+{
+  "client_log_id": "123e4567-e89b-42d3-a456-426614174000",
+  "measured_at": "2026-10-06T06:01:00.000Z",
+  "gaze": 85.5,
+  "blink": 72.0,
+  "head": 90.0,
+  "total": 82.8,
+  "face_detected": true
+}
+```
+
+- `client_log_id`: UUID v4, 같은 로그 재시도 동안 불변
+- `measured_at`: UTC RFC 3339, `started_at + 60초` 이상이고 서버 시각보다 최대 5분 미래
+- `minute_index = floor((measured_at - started_at) / 60초)`
+- `(session_id, client_log_id)`와 `(session_id, minute_index)`를 각각 UNIQUE로 보호
+
+**Response `200`**
+
+```json
+{
+  "success": true,
+  "data": {
+    "log_id": "uuid",
+    "client_log_id": "123e4567-e89b-42d3-a456-426614174000",
+    "measured_at": "2026-10-06T06:01:00.000Z",
+    "minute_index": 1,
+    "logged_at": "2026-10-06T06:02:30.000Z",
+    "focus_score": 82.8,
+    "attention_state": "FOCUSED",
+    "face_detected": true
+  },
+  "error": ""
+}
+```
+
+같은 `client_log_id`, `measured_at`, 정규화 점수의 재전송은 기존 로그로 200을 반환한다. 같은 ID의 다른 payload 또는 같은 분 구간의 다른 ID는 409다. 나머지 소유권·상태·점수 검증은 v1과 같다.
 
 ---
 
