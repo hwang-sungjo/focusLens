@@ -9,6 +9,27 @@ interface FocusResult {
   head: number
 }
 
+// 화면을 벗어나서 서버에 IN_PROGRESS로 남아 있는 세션
+interface PendingSession {
+  session_id: string
+  started_at: string
+}
+
+// 진행 중으로 남아 있는 세션이 있는지 서버에 확인 (docs/frontend-api-map.md: 세션 시작 409 처리)
+async function fetchInProgressSession(): Promise<PendingSession | null> {
+  try {
+    const res = await apiFetch('/api/sessions?status=IN_PROGRESS&limit=1')
+    const result = await res.json()
+    if (res.ok && result.data.sessions.length > 0) {
+      const s = result.data.sessions[0]
+      return { session_id: s.session_id, started_at: s.started_at }
+    }
+  } catch (err) {
+    console.error('진행 중 세션 확인 실패:', err)
+  }
+  return null
+}
+
 function SessionPage() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [error, setError] = useState('')
@@ -21,6 +42,7 @@ function SessionPage() {
   const [isCameraVisible, setIsCameraVisible] = useState(true)
   const [latestResult, setLatestResult] = useState<FocusResult | null>(null)
   const [showAlert, setShowAlert] = useState(false)
+  const [pendingSession, setPendingSession] = useState<PendingSession | null>(null)
 
   useEffect(() => {
     let stream: MediaStream
@@ -43,6 +65,13 @@ function SessionPage() {
     return () => {
       stream?.getTracks().forEach((track) => track.stop())
     }
+  }, [])
+
+  // 페이지에 들어올 때 남아 있는 세션이 있는지 한 번 확인
+  useEffect(() => {
+    fetchInProgressSession().then((pending) => {
+      if (pending) setPendingSession(pending)
+    })
   }, [])
 
   useEffect(() => {
@@ -108,6 +137,14 @@ function SessionPage() {
 
       const result = await res.json()
 
+      if (res.status === 409) {
+        // 다른 탭 등에서 시작된 세션이 남아 있는 경우 → 이어하기/종료 안내를 띄운다
+        const pending = await fetchInProgressSession()
+        if (pending) setPendingSession(pending)
+        setSessionError('이미 진행 중인 세션이 있습니다. 아래에서 이어하거나 종료해 주세요.')
+        return
+      }
+
       if (!res.ok) {
         setSessionError(result.error || '세션 시작에 실패했습니다.')
         return
@@ -119,6 +156,41 @@ function SessionPage() {
       setLatestResult(null)
       setShowAlert(false)
     } catch (err) {
+      setSessionError('서버에 연결할 수 없습니다.')
+    }
+  }
+
+  // 남아 있던 세션을 이어서 진행: 시작 시각 기준으로 타이머를 맞춘다
+  const handleResumeSession = () => {
+    if (!pendingSession) return
+    const elapsed = Math.floor((Date.now() - new Date(pendingSession.started_at).getTime()) / 1000)
+    setSessionId(pendingSession.session_id)
+    setElapsedSeconds(Math.max(0, elapsed))
+    setSessionStatus('in_progress')
+    setLatestResult(null)
+    setShowAlert(false)
+    setSessionError('')
+    setPendingSession(null)
+  }
+
+  // 남아 있던 세션을 종료: 이후 새 세션을 시작할 수 있다
+  const handleEndPendingSession = async () => {
+    if (!pendingSession) return
+    setSessionError('')
+
+    try {
+      const res = await apiFetch(`/api/sessions/${pendingSession.session_id}/end`, { method: 'POST' })
+      const result = await res.json()
+
+      // 409(이미 종료됨)도 남은 세션이 없다는 뜻이므로 정리하고 넘어간다
+      if (!res.ok && res.status !== 409) {
+        setSessionError(result.error || '이전 세션 종료에 실패했습니다.')
+        return
+      }
+
+      setPendingSession(null)
+      setSessionStatus('idle')
+    } catch {
       setSessionError('서버에 연결할 수 없습니다.')
     }
   }
@@ -223,9 +295,38 @@ function SessionPage() {
           </>
         )}
 
+        {pendingSession && sessionStatus !== 'in_progress' && (
+          <div className="mt-4 rounded-lg border border-accent bg-bg p-4">
+            <p className="text-sm text-primary font-medium">
+              진행 중인 세션이 있습니다 (
+              {new Date(pendingSession.started_at).toLocaleString('ko-KR', {
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+              })}{' '}
+              시작)
+            </p>
+            <div className="flex gap-3 mt-3">
+              <button
+                onClick={handleResumeSession}
+                className="bg-primary text-white rounded-lg px-4 py-2 hover:bg-secondary transition-colors"
+              >
+                이어하기
+              </button>
+              <button
+                onClick={handleEndPendingSession}
+                className="bg-red-600 text-white rounded-lg px-4 py-2 hover:bg-red-700 transition-colors"
+              >
+                종료하기
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="mt-4">
           <div className="flex gap-3">
-            {(sessionStatus === 'idle' || sessionStatus === 'completed') && (
+            {(sessionStatus === 'idle' || sessionStatus === 'completed') && !pendingSession && (
               <button
                 onClick={handleStartSession}
                 className="bg-primary text-white rounded-lg px-4 py-2 hover:bg-secondary transition-colors"
