@@ -40,6 +40,12 @@ describe('group invitations', () => {
       if (userId === 'owner-user-id') {
         return Promise.resolve({ id: 'owner-member-id', group_role: 'OWNER', status: 'ACTIVE' });
       }
+      if (userId === 'manager-user-id') {
+        return Promise.resolve({ id: 'manager-member-id', group_role: 'MANAGER', status: 'ACTIVE' });
+      }
+      if (userId === 'member-user-id' || userId === 'creator-without-role-id') {
+        return Promise.resolve({ id: 'member-id', group_role: 'MEMBER', status: 'ACTIVE' });
+      }
       return Promise.resolve(null);
     });
     prisma.users.findFirst.mockResolvedValue({
@@ -111,6 +117,73 @@ describe('group invitations', () => {
         statusCode: 409,
         message: '이미 처리 대기 중인 초대가 있습니다.',
       }),
+    );
+  });
+
+  it('allows a manager to invite a member', async () => {
+    const req = {
+      user: { sub: 'manager-user-id' },
+      params: { id: 'group-id' },
+      body: { invitee_user_id: 'invitee-user-id' },
+    };
+    const res = createResponse();
+    const next = jest.fn();
+
+    await groupsController.inviteMember(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(201);
+  });
+
+  it('rejects a member inviting another user', async () => {
+    const req = {
+      user: { sub: 'member-user-id' },
+      params: { id: 'group-id' },
+      body: { invitee_user_id: 'invitee-user-id' },
+    };
+    const res = createResponse();
+    const next = jest.fn();
+
+    await groupsController.inviteMember(req, res, next);
+
+    expect(tx.group_invitations.create).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledWith(
+      expect.objectContaining({ statusCode: 403, message: expect.stringContaining('OWNER 또는 MANAGER') }),
+    );
+  });
+
+  it('does not grant invite permission from groups.created_by_user_id', async () => {
+    prisma.groups.findFirst.mockResolvedValue({
+      id: 'group-id',
+      created_by_user_id: 'creator-without-role-id',
+    });
+    const req = {
+      user: { sub: 'creator-without-role-id' },
+      params: { id: 'group-id' },
+      body: { invitee_user_id: 'invitee-user-id' },
+    };
+    const res = createResponse();
+    const next = jest.fn();
+
+    await groupsController.inviteMember(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 403 }));
+    expect(tx.group_invitations.create).not.toHaveBeenCalled();
+  });
+
+  it('allows only an owner to change member roles', async () => {
+    const req = {
+      user: { sub: 'manager-user-id' },
+      params: { id: 'group-id', memberId: 'member-id' },
+      body: { group_role: 'MANAGER' },
+    };
+    const res = createResponse();
+    const next = jest.fn();
+
+    await groupsController.updateMemberRole(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(
+      expect.objectContaining({ statusCode: 403, message: '멤버 역할 변경은 OWNER만 가능합니다.' }),
     );
   });
 });

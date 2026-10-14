@@ -31,7 +31,9 @@ router.post(
     scoreBody('head'),
     scoreBody('total'),
     body('face_detected')
-      .optional()
+      .exists()
+      .withMessage('face_detected는 필수입니다.')
+      .bail()
       .custom((value) => typeof value === 'boolean')
       .withMessage('face_detected는 boolean이어야 합니다.'),
   ],

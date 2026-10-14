@@ -5,12 +5,12 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
-const morgan = require('morgan');
 const swaggerUi = require('swagger-ui-express');
 const YAML = require('yaml');
 
 const authRouter = require('./src/routes/auth');
 const sessionsRouter = require('./src/routes/sessions');
+const v2SessionsRouter = require('./src/routes/v2Sessions');
 const reportsRouter = require('./src/routes/reports');
 const usersRouter = require('./src/routes/users');
 const connectionsRouter = require('./src/routes/connections');
@@ -19,23 +19,28 @@ const rankingsRouter = require('./src/routes/rankings');
 const groupsRouter = require('./src/routes/groups');
 
 const { notFound, errorHandler } = require('./src/middleware/errorHandler');
+const { requestContext } = require('./src/middleware/requestContext');
 const prisma = require('./src/models/prismaClient');
 const { redis } = require('./src/services/redis');
+const { getMetricsSnapshot, recordMetric } = require('./src/services/observability');
 
 const app = express();
 const openApiPath = path.resolve(__dirname, '../docs/swagger.yaml');
 const openApiDocument = YAML.parse(fs.readFileSync(openApiPath, 'utf8'));
 
 // ── 기본 미들웨어 ──────────────────────────────────────────────────
-app.use(cors({ origin: process.env.CORS_ORIGIN || '*', credentials: true }));
+app.use(cors({
+  origin: process.env.CORS_ORIGIN || '*',
+  credentials: true,
+  exposedHeaders: ['X-Request-ID'],
+}));
+app.use(requestContext);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
 // ── Health Check ───────────────────────────────────────────────────
 // DB·Redis를 실제로 ping해서 연결 상태를 확인
-// 어느 한쪽이 실패해도 서버 자체는 살아있으므로 HTTP 200 유지,
-// 실패한 서비스는 "disconnected"로 표기 (모니터링/알림 시스템에서 data 필드로 판단)
+// 어느 한쪽이라도 실패하면 준비 상태를 503 degraded로 반환한다.
 app.get('/health', async (_req, res) => {
   const [dbStatus, redisStatus] = await Promise.all([
     // PostgreSQL ping
@@ -50,6 +55,9 @@ app.get('/health', async (_req, res) => {
   ]);
 
   const allHealthy = dbStatus === 'connected' && redisStatus === 'connected';
+  if (!allHealthy) {
+    recordMetric('dependency_health_failures_total', { db: dbStatus, redis: redisStatus });
+  }
 
   return res.status(allHealthy ? 200 : 503).json({
     success: allHealthy,
@@ -58,6 +66,7 @@ app.get('/health', async (_req, res) => {
       timestamp: new Date().toISOString(),
       db: dbStatus,
       redis: redisStatus,
+      metrics: getMetricsSnapshot(),
     },
     error: allHealthy ? '' : '일부 서비스에 연결할 수 없습니다.',
   });
@@ -81,6 +90,7 @@ app.use(
 // ── API 라우터 마운트 ──────────────────────────────────────────────
 app.use('/api/auth', authRouter);
 app.use('/api/sessions', sessionsRouter);
+app.use('/api/v2/sessions', v2SessionsRouter);
 app.use('/api/reports', reportsRouter);
 app.use('/api/users', usersRouter);
 app.use('/api/connections', connectionsRouter);

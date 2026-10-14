@@ -23,7 +23,15 @@ router.post(
   groupsController.createGroup,
 );
 
-router.get('/', groupsController.getMyGroups);
+router.get(
+  '/',
+  [
+    query('page').optional().isInt({ min: 1 }),
+    query('limit').optional().isInt({ min: 1, max: 100 }),
+  ],
+  validate,
+  groupsController.getMyGroups,
+);
 
 router.post(
   '/join',
@@ -66,7 +74,16 @@ router.delete(
   groupsController.removeMember,
 );
 
-router.get('/:id/dashboard', [uuidParam('id')], validate, groupsController.getDashboard);
+router.get(
+  '/:id/dashboard',
+  [
+    uuidParam('id'),
+    query('page').optional().isInt({ min: 1 }),
+    query('limit').optional().isInt({ min: 1, max: 100 }),
+  ],
+  validate,
+  groupsController.getDashboard,
+);
 
 router.post(
   '/:id/goals',
@@ -102,6 +119,8 @@ router.get(
   [
     uuidParam('id'),
     query('status').optional().isIn(['ACTIVE', 'COMPLETED', 'CANCELLED']),
+    query('page').optional().isInt({ min: 1 }),
+    query('limit').optional().isInt({ min: 1, max: 100 }),
   ],
   validate,
   groupsController.getGoals,

@@ -38,6 +38,8 @@ router.get(
       .optional()
       .isIn(['true', 'false'])
       .withMessage('include_pending은 true 또는 false여야 합니다.'),
+    query('page').optional().isInt({ min: 1 }).withMessage('page는 1 이상의 정수여야 합니다.'),
+    query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('limit은 1~100 범위여야 합니다.'),
   ],
   validate,
   connectionsController.getConnections,

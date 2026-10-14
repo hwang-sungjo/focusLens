@@ -716,20 +716,20 @@ interface MinuteScore {
 기획서 초기 가중치를 사용한다.
 
 ```text
-Gaze  = 0.4
-Blink = 0.3
-Head  = 0.3
+Gaze  = 0.3
+Blink = 0.5
+Head  = 0.2
 ```
 
 공식:
 
 ```text
 total =
-gaze × 0.4
+gaze × 0.3
 +
-blink × 0.3
+blink × 0.5
 +
-head × 0.3
+head × 0.2
 ```
 
 예:
@@ -744,11 +744,11 @@ head  = 90.0
 
 ```text
 total =
-85.5 × 0.4
+85.5 × 0.3
 +
-72.0 × 0.3
+72.0 × 0.5
 +
-90.0 × 0.3
+90.0 × 0.2
 ```
 
 ```text
@@ -1309,9 +1309,9 @@ export const focusConfig = {
   },
 
   weights: {
-    gaze: 0.4,
-    blink: 0.3,
-    head: 0.3,
+    gaze: 0.3,
+    blink: 0.5,
+    head: 0.2,
   },
 };
 ```

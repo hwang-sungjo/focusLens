@@ -1,9 +1,11 @@
 // 보안 원칙: 그룹 권한은 반드시 group_members.group_role 기준으로 판단
 // groups.created_by_user_id는 생성 이력 보존용이며 권한 판단에 사용하지 않는다.
-const { Prisma } = require('@prisma/client');
 const { randomBytes } = require('crypto');
 const prisma = require('../models/prismaClient');
 const { createError } = require('../middleware/errorHandler');
+const { getPagination } = require('../utils/pagination');
+const { calculateDurationSeconds } = require('../utils/sessionMetrics');
+const { getSessionMetricMap } = require('../services/sessionStats');
 
 const MANAGER_ROLES = ['OWNER', 'MANAGER'];
 
@@ -79,13 +81,20 @@ const createGroup = async (req, res, next) => {
 /** GET /api/groups */
 const getMyGroups = async (req, res, next) => {
   try {
-    const memberships = await prisma.group_members.findMany({
+    const { page, limit, skip } = getPagination(req.query);
+    const where = {
+      user_id: req.user.sub,
+      status: 'ACTIVE',
+      group: { status: 'ACTIVE', deleted_at: null },
+    };
+    const [memberships, total] = await prisma.$transaction([
+      prisma.group_members.findMany({
       where: {
-        user_id: req.user.sub,
-        status: 'ACTIVE',
-        group: { status: 'ACTIVE', deleted_at: null },
+        ...where,
       },
-      orderBy: { joined_at: 'desc' },
+      orderBy: [{ joined_at: 'desc' }, { id: 'desc' }],
+      skip,
+      take: limit,
       include: {
         group: {
           select: {
@@ -100,7 +109,9 @@ const getMyGroups = async (req, res, next) => {
           },
         },
       },
-    });
+      }),
+      prisma.group_members.count({ where }),
+    ]);
 
     const groups = memberships.map(({ group, group_role: myRole, joined_at: joinedAt }) => ({
       group_id: group.id,
@@ -115,7 +126,11 @@ const getMyGroups = async (req, res, next) => {
       created_at: group.created_at,
     }));
 
-    return res.status(200).json({ success: true, data: { groups }, error: '' });
+    return res.status(200).json({
+      success: true,
+      data: { groups, pagination: { page, limit, total } },
+      error: '',
+    });
   } catch (err) {
     next(err);
   }
@@ -209,9 +224,10 @@ const getGroup = async (req, res, next) => {
         status: true,
         created_at: true,
         group_members: {
-          where: { status: 'ACTIVE' },
+          where: { user_id: req.user.sub, status: 'ACTIVE' },
           select: { user_id: true, group_role: true },
         },
+        _count: { select: { group_members: { where: { status: 'ACTIVE' } } } },
       },
     });
     if (!group) return next(createError('그룹을 찾을 수 없습니다.', 404));
@@ -230,7 +246,7 @@ const getGroup = async (req, res, next) => {
         group_type: group.group_type,
         visibility: group.visibility,
         status: group.status,
-        member_count: group.group_members.length,
+        member_count: group._count.group_members,
         my_role: myMember?.group_role ?? null,
         created_at: group.created_at,
       },
@@ -433,36 +449,97 @@ const removeMember = async (req, res, next) => {
 const getDashboard = async (req, res, next) => {
   try {
     const groupId = req.params.id;
+    const { page, limit, skip } = getPagination(req.query);
     await requireGroup(groupId);
     const myMember = await getMyMember(groupId, req.user.sub);
     if (!isActiveMember(myMember)) return next(createError('그룹 구성원만 대시보드를 조회할 수 있습니다.', 403));
 
     const isManager = hasRole(myMember, ...MANAGER_ROLES);
-    const memberFilter = isManager ? Prisma.empty : Prisma.sql`AND group_member_id = ${myMember.id}`;
-    const rows = await prisma.$queryRaw(
-      Prisma.sql`
-        SELECT *
-        FROM v_group_member_stats
-        WHERE group_id = ${groupId}
-        ${memberFilter}
-        ORDER BY group_role, joined_at
-      `,
-    );
-    const members = rows.map((row) => ({
-      group_member_id: row.group_member_id,
-      user_id: row.user_id,
-      group_role: row.group_role,
-      nickname: row.nickname,
-      profile_image_url: row.profile_image_url,
-      total_sessions: Number(row.total_sessions),
-      total_study_seconds: Number(row.total_study_seconds),
-      avg_focus_score: row.avg_focus_score === null ? null : Number(row.avg_focus_score),
-      last_session_at: row.last_session_at,
-    }));
+    const memberWhere = {
+      group_id: groupId,
+      status: 'ACTIVE',
+      ...(!isManager && { id: myMember.id }),
+    };
+    const [memberRows, total] = await prisma.$transaction([
+      prisma.group_members.findMany({
+        where: memberWhere,
+        orderBy: [{ group_role: 'asc' }, { joined_at: 'asc' }, { id: 'asc' }],
+        skip,
+        take: limit,
+        select: {
+          id: true,
+          user_id: true,
+          group_role: true,
+          user: {
+            select: {
+              user_profile: { select: { nickname: true, profile_image_url: true } },
+              user_privacy_settings: { select: { group_data_sharing: true } },
+            },
+          },
+        },
+      }),
+      prisma.group_members.count({ where: memberWhere }),
+    ]);
+
+    const sharingUserIds = memberRows
+      .filter((member) => member.user.user_privacy_settings?.group_data_sharing)
+      .map((member) => member.user_id);
+    const sessions = sharingUserIds.length
+      ? await prisma.sessions.findMany({
+          where: {
+            user_id: { in: sharingUserIds },
+            status: 'COMPLETED',
+            ended_at: { not: null },
+          },
+          select: { id: true, user_id: true, started_at: true, ended_at: true },
+        })
+      : [];
+    const metricMap = await getSessionMetricMap(sessions.map((session) => session.id));
+    const statsByUser = new Map();
+    for (const session of sessions) {
+      const stats = statsByUser.get(session.user_id) ?? {
+        total_sessions: 0,
+        total_study_seconds: 0,
+        focus_score_sum: 0,
+        focus_log_count: 0,
+        last_session_at: null,
+      };
+      const metric = metricMap.get(session.id);
+      stats.total_sessions += 1;
+      stats.total_study_seconds += calculateDurationSeconds(session.started_at, session.ended_at) ?? 0;
+      stats.focus_score_sum += metric?.focus_score_sum ?? 0;
+      stats.focus_log_count += metric?.log_count ?? 0;
+      if (!stats.last_session_at || session.started_at > stats.last_session_at) {
+        stats.last_session_at = session.started_at;
+      }
+      statsByUser.set(session.user_id, stats);
+    }
+
+    const members = memberRows.map((member) => {
+      const stats = statsByUser.get(member.user_id);
+      return {
+        group_member_id: member.id,
+        user_id: member.user_id,
+        group_role: member.group_role,
+        nickname: member.user.user_profile?.nickname ?? null,
+        profile_image_url: member.user.user_profile?.profile_image_url ?? null,
+        total_sessions: stats?.total_sessions ?? 0,
+        total_study_seconds: stats?.total_study_seconds ?? 0,
+        avg_focus_score: stats?.focus_log_count
+          ? Math.round((stats.focus_score_sum / stats.focus_log_count) * 100) / 100
+          : null,
+        last_session_at: stats?.last_session_at ?? null,
+      };
+    });
 
     return res.status(200).json({
       success: true,
-      data: { group_id: groupId, scope: isManager ? 'all_members' : 'self', members },
+      data: {
+        group_id: groupId,
+        scope: isManager ? 'all_members' : 'self',
+        members,
+        pagination: { page, limit, total },
+      },
       error: '',
     });
   } catch (err) {
@@ -524,20 +601,27 @@ const createGoal = async (req, res, next) => {
 const getGoals = async (req, res, next) => {
   try {
     const groupId = req.params.id;
+    const { page, limit, skip } = getPagination(req.query);
     await requireGroup(groupId);
     const myMember = await getMyMember(groupId, req.user.sub);
     if (!isActiveMember(myMember)) return next(createError('그룹 구성원만 목표를 조회할 수 있습니다.', 403));
 
-    const goals = await prisma.group_goals.findMany({
-      where: { group_id: groupId, ...(req.query.status && { status: req.query.status }) },
-      orderBy: { created_at: 'desc' },
+    const where = { group_id: groupId, ...(req.query.status && { status: req.query.status }) };
+    const [goals, total] = await prisma.$transaction([
+      prisma.group_goals.findMany({
+      where,
+      orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
+      skip,
+      take: limit,
       include: {
         assignees: {
           where: { group_member: { status: 'ACTIVE' } },
           select: { group_member_id: true },
         },
       },
-    });
+      }),
+      prisma.group_goals.count({ where }),
+    ]);
 
     return res.status(200).json({
       success: true,
@@ -557,6 +641,7 @@ const getGoals = async (req, res, next) => {
             goal.assignees.some((assignee) => assignee.group_member_id === myMember.id),
           created_at: goal.created_at,
         })),
+        pagination: { page, limit, total },
       },
       error: '',
     });
@@ -705,8 +790,7 @@ const createFeedback = async (req, res, next) => {
 const getFeedbacks = async (req, res, next) => {
   try {
     const groupId = req.params.id;
-    const page = Number.parseInt(req.query.page || '1', 10);
-    const limit = Number.parseInt(req.query.limit || '20', 10);
+    const { page, limit, skip } = getPagination(req.query);
     const requestedTarget = req.query.target_member_id;
     await requireGroup(groupId);
     const myMember = await getMyMember(groupId, req.user.sub);
@@ -727,8 +811,8 @@ const getFeedbacks = async (req, res, next) => {
     const [feedbacks, total] = await prisma.$transaction([
       prisma.manager_feedbacks.findMany({
         where,
-        orderBy: { created_at: 'desc' },
-        skip: (page - 1) * limit,
+        orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
+        skip,
         take: limit,
         include: {
           target_member: {

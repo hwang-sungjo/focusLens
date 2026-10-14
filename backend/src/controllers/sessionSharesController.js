@@ -2,7 +2,10 @@
 // 공감 수 등 파생 값은 v_session_share_reaction_counts View에서 산출
 const { Prisma } = require('@prisma/client');
 const prisma = require('../models/prismaClient');
+const { calculateDurationSeconds } = require('../utils/sessionMetrics');
+const { getSessionMetricMap } = require('../services/sessionStats');
 const { createError } = require('../middleware/errorHandler');
+const { getPagination } = require('../utils/pagination');
 
 const SCOPE_RANK = { PRIVATE: 0, FRIENDS: 1, GROUP: 2, PUBLIC: 3 };
 
@@ -24,18 +27,24 @@ const getViewerContext = async (viewerId) => {
     ),
   );
   const groupIds = memberships.map((membership) => membership.group_id);
-  const commonGroupMembers = groupIds.length
-    ? await prisma.group_members.findMany({
-        where: { group_id: { in: groupIds }, status: 'ACTIVE' },
-        select: { user_id: true },
-      })
-    : [];
-
   return {
     friendIds,
     groupIds: new Set(groupIds),
-    commonGroupUserIds: new Set(commonGroupMembers.map((membership) => membership.user_id)),
+    commonGroupUserIds: new Set(),
   };
+};
+
+const loadCommonGroupUserIds = async (context, ownerIds) => {
+  if (!context.groupIds.size || !ownerIds.length) return new Set();
+  const memberships = await prisma.group_members.findMany({
+    where: {
+      group_id: { in: Array.from(context.groupIds) },
+      user_id: { in: ownerIds },
+      status: 'ACTIVE',
+    },
+    select: { user_id: true },
+  });
+  return new Set(memberships.map((membership) => membership.user_id));
 };
 
 const isWithinOwnerPrivacy = (shareScope, privacy) =>
@@ -59,7 +68,12 @@ const canViewField = (visibility, ownerId, viewerId, context) => {
 
 const findAccessibleShare = async (shareId, viewerId) => {
   const share = await prisma.session_shares.findFirst({
-    where: { id: shareId, status: 'ACTIVE', deleted_at: null },
+    where: {
+      id: shareId,
+      status: 'ACTIVE',
+      deleted_at: null,
+      session: { status: 'COMPLETED', ended_at: { not: null } },
+    },
     include: {
       session: {
         select: {
@@ -88,11 +102,13 @@ const createShare = async (req, res, next) => {
 
     const session = await prisma.sessions.findUnique({
       where: { id: session_id },
-      select: { id: true, user_id: true, status: true },
+      select: { id: true, user_id: true, status: true, ended_at: true },
     });
     if (!session) return next(createError('세션을 찾을 수 없습니다.', 404));
     if (session.user_id !== userId) return next(createError('해당 세션에 대한 권한이 없습니다.', 403));
-    if (session.status !== 'COMPLETED') return next(createError('진행 중인 세션은 공유할 수 없습니다.', 409));
+    if (session.status !== 'COMPLETED' || !session.ended_at) {
+      return next(createError('완료되지 않은 세션은 공유할 수 없습니다.', 409));
+    }
 
     const privacy = await prisma.user_privacy_settings.findUnique({ where: { user_id: userId } });
     if (!privacy) return next(createError('프라이버시 설정을 찾을 수 없습니다.', 500));
@@ -167,8 +183,7 @@ const createShare = async (req, res, next) => {
 const getFeed = async (req, res, next) => {
   try {
     const viewerId = req.user.sub;
-    const page = Number.parseInt(req.query.page || '1', 10);
-    const limit = Number.parseInt(req.query.limit || '20', 10);
+    const { page, limit, skip } = getPagination(req.query);
     const scope = req.query.scope || 'all';
     const context = await getViewerContext(viewerId);
 
@@ -194,9 +209,51 @@ const getFeed = async (req, res, next) => {
       };
     }
 
-    const candidates = await prisma.session_shares.findMany({
-      where: { status: 'ACTIVE', deleted_at: null, ...scopeFilter },
-      orderBy: { created_at: 'desc' },
+    const privacyFilter = {
+      OR: [
+        {
+          share_scope: 'PUBLIC',
+          session: {
+            user: { user_privacy_settings: { is: { default_session_scope: 'PUBLIC' } } },
+          },
+        },
+        {
+          share_scope: 'FRIENDS',
+          session: {
+            user: {
+              user_privacy_settings: {
+                is: { default_session_scope: { in: ['FRIENDS', 'GROUP', 'PUBLIC'] } },
+              },
+            },
+          },
+        },
+        {
+          share_scope: 'GROUP',
+          session: {
+            user: {
+              user_privacy_settings: {
+                is: { default_session_scope: { in: ['GROUP', 'PUBLIC'] } },
+              },
+            },
+          },
+        },
+      ],
+    };
+    const where = {
+        status: 'ACTIVE',
+        deleted_at: null,
+        AND: [
+          scopeFilter,
+          { session: { status: 'COMPLETED', ended_at: { not: null } } },
+          privacyFilter,
+        ],
+    };
+    const [pagedShares, total] = await Promise.all([
+      prisma.session_shares.findMany({
+      where,
+      orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
+      skip,
+      take: limit,
       select: {
         id: true,
         session_id: true,
@@ -213,7 +270,6 @@ const getFeed = async (req, res, next) => {
             user_id: true,
             started_at: true,
             ended_at: true,
-            concentration_logs: { select: { focus_score: true } },
             user: {
               select: {
                 user_profile: { select: { nickname: true, profile_image_url: true } },
@@ -223,25 +279,25 @@ const getFeed = async (req, res, next) => {
           },
         },
       },
-    });
-
-    const accessibleShares = candidates.filter((share) => {
-      const privacy = share.session.user.user_privacy_settings;
-      return isWithinOwnerPrivacy(share.share_scope, privacy) && canAccessShare(share, viewerId, context);
-    });
-    const total = accessibleShares.length;
-    const pagedShares = accessibleShares.slice((page - 1) * limit, page * limit);
+      }),
+      prisma.session_shares.count({ where }),
+    ]);
     const shareIds = pagedShares.map((share) => share.id);
-
-    const reactionRows = shareIds.length
-      ? await prisma.$queryRaw(
+    const ownerIds = [...new Set(pagedShares.map((share) => share.session.user_id))];
+    const [metricMap, reactionRows, commonGroupUserIds] = await Promise.all([
+      getSessionMetricMap(pagedShares.map((share) => share.session_id)),
+      shareIds.length
+        ? prisma.$queryRaw(
           Prisma.sql`
             SELECT session_share_id, reaction_type, reaction_count
             FROM v_session_share_reaction_counts
             WHERE session_share_id IN (${Prisma.join(shareIds)})
           `,
         )
-      : [];
+        : [],
+      loadCommonGroupUserIds(context, ownerIds),
+    ]);
+    context.commonGroupUserIds = commonGroupUserIds;
     const reactionCounts = new Map();
     for (const row of reactionRows) {
       if (!reactionCounts.has(row.session_share_id)) {
@@ -253,13 +309,8 @@ const getFeed = async (req, res, next) => {
     const feed = pagedShares.map((share) => {
       const ownerId = share.session.user_id;
       const privacy = share.session.user.user_privacy_settings;
-      const scores = share.session.concentration_logs.map((log) => log.focus_score);
-      const average = scores.length
-        ? Math.round((scores.reduce((sum, score) => sum + score, 0) / scores.length) * 100) / 100
-        : null;
-      const duration = share.session.ended_at
-        ? Math.max(0, Math.floor((share.session.ended_at - share.session.started_at) / 1000))
-        : null;
+      const average = metricMap.get(share.session_id)?.avg_focus_score ?? null;
+      const duration = calculateDurationSeconds(share.session.started_at, share.session.ended_at);
 
       return {
         share_id: share.id,
