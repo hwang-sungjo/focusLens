@@ -226,6 +226,16 @@ function SessionPage() {
     }
   }
 
+  const attentionLabel = (state: FocusResult['attention_state']) =>
+    state === 'FOCUSED' ? '집중 상태' : state === 'NORMAL' ? '보통' : '집중 이탈'
+
+  const attentionStyle = (state: FocusResult['attention_state']) =>
+    state === 'FOCUSED'
+      ? 'bg-green-100 text-green-700'
+      : state === 'NORMAL'
+      ? 'bg-yellow-100 text-yellow-700'
+      : 'bg-red-100 text-red-700'
+
   return (
     <div className="min-h-screen bg-bg p-6">
       <h1 className="text-2xl font-bold text-primary mb-4">학습 세션</h1>
@@ -233,115 +243,131 @@ function SessionPage() {
       {error && <p className="text-red-600 text-sm mb-4">{error}</p>}
       {sessionError && <p className="text-red-600 text-sm mb-4">{sessionError}</p>}
 
-      <div className="bg-surface rounded-xl shadow-md p-4 max-w-2xl">
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          className={`w-full rounded-lg bg-black ${isCameraVisible ? '' : 'hidden'}`}
-        />
-        <p className="text-sm text-secondary mt-2">
-          {isStreaming ? '웹캠 연결됨' : '웹캠 연결 대기 중...'}
-        </p>
-        <button
-          onClick={() => setIsCameraVisible((prev) => !prev)}
-          className="text-sm text-secondary underline mt-1"
-        >
-          {isCameraVisible ? '웹캠 숨기기' : '웹캠 보이기'}
-        </button>
-
-        {sessionStatus === 'in_progress' && (
-          <>
-            <p className="text-3xl font-bold text-primary mt-3">
-              {formatTime(elapsedSeconds)}
-            </p>
-
-            {logError && <p className="text-sm text-red-600 mt-1">{logError}</p>}
-
-            {latestResult && (
-              <div className="mt-4">
-                <div className="flex items-center gap-3">
-                  <p className="text-5xl font-bold text-primary">
-                    {latestResult.focus_score.toFixed(0)}
-                  </p>
-                  <span
-                    className={`text-sm font-medium px-2 py-1 rounded ${
-                      latestResult.attention_state === 'FOCUSED'
-                        ? 'bg-green-100 text-green-700'
-                        : latestResult.attention_state === 'NORMAL'
-                        ? 'bg-yellow-100 text-yellow-700'
-                        : 'bg-red-100 text-red-700'
-                    }`}
-                  >
-                    {latestResult.attention_state === 'FOCUSED'
-                      ? '집중 상태'
-                      : latestResult.attention_state === 'NORMAL'
-                      ? '보통'
-                      : '집중 이탈'}
-                  </span>
-                </div>
-
-                <div className="mt-3 space-y-2">
-                  {[
-                    { label: 'Gaze', value: latestResult.gaze },
-                    { label: 'Blink', value: latestResult.blink },
-                    { label: 'Head', value: latestResult.head },
-                  ].map(({ label, value }) => (
-                    <div key={label}>
-                      <div className="flex justify-between text-xs text-secondary mb-1">
-                        <span>{label}</span>
-                        <span>{value.toFixed(0)}</span>
-                      </div>
-                      <div className="w-full bg-gray-200 rounded-full h-2">
-                        <div
-                          className="bg-accent h-2 rounded-full"
-                          style={{ width: `${value}%` }}
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </>
-        )}
-
-        {pendingSession && sessionStatus !== 'in_progress' && (
-          <div className="mt-4 rounded-lg border border-accent bg-bg p-4">
-            <p className="text-sm text-primary font-medium">
-              진행 중인 세션이 있습니다 (
-              {new Date(pendingSession.started_at).toLocaleString('ko-KR', {
-                month: '2-digit',
-                day: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit',
-              })}{' '}
-              시작)
-            </p>
-            <div className="flex gap-3 mt-3">
-              <button
-                onClick={handleResumeSession}
-                className="bg-primary text-white rounded-lg px-4 py-2 hover:bg-secondary transition-colors"
-              >
-                이어하기
-              </button>
-              <button
-                onClick={handleEndPendingSession}
-                className="bg-red-600 text-white rounded-lg px-4 py-2 hover:bg-red-700 transition-colors"
-              >
-                종료하기
-              </button>
+      {/* 기획서 6.3절 (3): 좌측 2/3 웹캠, 우측 1/3 실시간 패널. 좁은 화면에서는 위아래로 쌓인다 */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 max-w-6xl">
+        {/* 좌측: 웹캠 */}
+        <div className="lg:col-span-2 bg-surface rounded-xl shadow-md p-4">
+          {/* video는 숨겨도 화면에서 빼지 않는다 (나중에 분석이 연결되면 계속 동작해야 함) */}
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            className={`w-full aspect-video rounded-lg bg-black object-cover ${
+              isCameraVisible ? '' : 'hidden'
+            }`}
+          />
+          {!isCameraVisible && (
+            <div className="w-full aspect-video rounded-lg bg-bg flex items-center justify-center text-sm text-secondary">
+              웹캠 화면이 숨겨져 있어요. 세션은 계속 진행됩니다.
             </div>
+          )}
+          <div className="flex items-center justify-between mt-2">
+            <p className="text-sm text-secondary">
+              {isStreaming ? '웹캠 연결됨' : '웹캠 연결 대기 중...'}
+            </p>
+            <button
+              onClick={() => setIsCameraVisible((prev) => !prev)}
+              className="text-sm text-secondary underline"
+            >
+              {isCameraVisible ? '웹캠 숨기기' : '웹캠 보이기'}
+            </button>
           </div>
-        )}
+        </div>
 
-        <div className="mt-4">
-          <div className="flex gap-3">
+        {/* 우측: 실시간 집중도 패널 */}
+        <div className="bg-surface rounded-xl shadow-md p-5 flex flex-col">
+          <p className="text-sm text-secondary">경과 시간</p>
+          <p
+            className={`text-3xl font-bold ${
+              sessionStatus === 'in_progress' ? 'text-primary' : 'text-gray-300'
+            }`}
+          >
+            {formatTime(sessionStatus === 'in_progress' ? elapsedSeconds : 0)}
+          </p>
+          {logError && <p className="text-sm text-red-600 mt-1">{logError}</p>}
+
+          <p className="text-sm text-secondary mt-5">집중도</p>
+          <div className="flex items-center gap-3">
+            <p className="text-5xl font-bold text-primary">
+              {sessionStatus === 'in_progress' && latestResult
+                ? latestResult.focus_score.toFixed(0)
+                : '--'}
+            </p>
+            {sessionStatus === 'in_progress' && latestResult && (
+              <span
+                className={`text-sm font-medium px-2 py-1 rounded ${attentionStyle(
+                  latestResult.attention_state,
+                )}`}
+              >
+                {attentionLabel(latestResult.attention_state)}
+              </span>
+            )}
+          </div>
+          {sessionStatus === 'in_progress' && !latestResult && (
+            <p className="text-xs text-secondary mt-1">첫 점수는 세션 시작 1분 뒤에 표시돼요.</p>
+          )}
+
+          {/* Gaze/Blink/Head 미니 게이지 */}
+          <div className="mt-4 space-y-2">
+            {[
+              { label: 'Gaze', value: latestResult?.gaze },
+              { label: 'Blink', value: latestResult?.blink },
+              { label: 'Head', value: latestResult?.head },
+            ].map(({ label, value }) => {
+              const shown = sessionStatus === 'in_progress' && value !== undefined
+              return (
+                <div key={label}>
+                  <div className="flex justify-between text-xs text-secondary mb-1">
+                    <span>{label}</span>
+                    <span>{shown ? value.toFixed(0) : '--'}</span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-2">
+                    <div
+                      className="bg-accent h-2 rounded-full"
+                      style={{ width: `${shown ? value : 0}%` }}
+                    />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          {pendingSession && sessionStatus !== 'in_progress' && (
+            <div className="mt-5 rounded-lg border border-accent bg-bg p-4">
+              <p className="text-sm text-primary font-medium">
+                진행 중인 세션이 있습니다 (
+                {new Date(pendingSession.started_at).toLocaleString('ko-KR', {
+                  month: '2-digit',
+                  day: '2-digit',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}{' '}
+                시작)
+              </p>
+              <div className="flex gap-3 mt-3">
+                <button
+                  onClick={handleResumeSession}
+                  className="bg-primary text-white rounded-lg px-4 py-2 hover:bg-secondary transition-colors"
+                >
+                  이어하기
+                </button>
+                <button
+                  onClick={handleEndPendingSession}
+                  className="bg-red-600 text-white rounded-lg px-4 py-2 hover:bg-red-700 transition-colors"
+                >
+                  종료하기
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* 하단 버튼: 패널 맨 아래에 붙인다 (일시정지는 백엔드 미지원으로 제외) */}
+          <div className="mt-auto pt-5">
             {(sessionStatus === 'idle' || sessionStatus === 'completed') && !pendingSession && (
               <button
                 onClick={handleStartSession}
-                className="bg-primary text-white rounded-lg px-4 py-2 hover:bg-secondary transition-colors"
+                className="w-full bg-primary text-white rounded-lg px-4 py-2 hover:bg-secondary transition-colors"
               >
                 세션 시작
               </button>
@@ -350,18 +376,18 @@ function SessionPage() {
             {sessionStatus === 'in_progress' && (
               <button
                 onClick={handleEndSession}
-                className="bg-red-600 text-white rounded-lg px-4 py-2 hover:bg-red-700 transition-colors"
+                className="w-full bg-red-600 text-white rounded-lg px-4 py-2 hover:bg-red-700 transition-colors"
               >
                 세션 종료
               </button>
             )}
-          </div>
 
-          {sessionStatus === 'completed' && (
-            <p className="text-primary font-medium mt-2">
-              세션이 종료되었습니다. 수고하셨어요!
-            </p>
-          )}
+            {sessionStatus === 'completed' && (
+              <p className="text-primary font-medium mt-2 text-center">
+                세션이 종료되었습니다. 수고하셨어요!
+              </p>
+            )}
+          </div>
         </div>
       </div>
 
