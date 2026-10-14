@@ -7,6 +7,7 @@ import ReportPage from './pages/ReportPage'
 import ProfilePage from './pages/ProfilePage'
 import ProtectedRoute from './ProtectedRoute'
 import RegisterPage from './pages/RegisterPage'
+import { apiFetch, clearAuth } from './api'
 
 function AppContent() {
   const location = useLocation()
@@ -16,17 +17,13 @@ function AppContent() {
   const hideNav = location.pathname === '/login' || location.pathname === '/register'
 
   const handleLogout = async () => {
-    const token = localStorage.getItem('access_token')
     try {
-      await fetch('http://localhost:3000/api/auth/logout', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      })
+      // 401이어도 갱신하지 않음: 어차피 로그아웃할 것이므로 그대로 진행
+      await apiFetch('/api/auth/logout', { method: 'POST', skipAuthRefresh: true })
     } catch (err) {
       // 서버 요청 실패해도 로컬 토큰은 지운다
     }
-    localStorage.removeItem('access_token')
-    localStorage.removeItem('user_id')
+    clearAuth()
     window.location.href = '/login'
   }
 

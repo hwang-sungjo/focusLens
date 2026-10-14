@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { apiFetch } from '../api'
 
 interface Profile {
   user_id: string
@@ -23,24 +24,19 @@ function ProfilePage() {
   const [message, setMessage] = useState('')
   const [saving, setSaving] = useState(false)
 
-  const token = localStorage.getItem('access_token')
   const userId = localStorage.getItem('user_id')
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const profileRes = await fetch(`http://localhost:3000/api/users/${userId}/profile`, {
-          headers: { Authorization: `Bearer ${token}` },
-        })
+        const profileRes = await apiFetch(`/api/users/${userId}/profile`)
         const profileResult: { data: Profile } = await profileRes.json()
         if (profileRes.ok) {
           setNickname(profileResult.data.nickname)
           setBio(profileResult.data.bio || '')
         }
 
-        const privacyRes = await fetch('http://localhost:3000/api/users/me/privacy', {
-          headers: { Authorization: `Bearer ${token}` },
-        })
+        const privacyRes = await apiFetch('/api/users/me/privacy')
         const privacyResult = await privacyRes.json()
         if (privacyRes.ok) {
           setPrivacy(privacyResult.data)
@@ -59,12 +55,8 @@ function ProfilePage() {
     setSaving(true)
 
     try {
-      const profileRes = await fetch('http://localhost:3000/api/users/me/profile', {
+      const profileRes = await apiFetch('/api/users/me/profile', {
         method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
         body: JSON.stringify({ nickname, bio }),
       })
       const profileResult = await profileRes.json()
@@ -75,12 +67,8 @@ function ProfilePage() {
       }
 
       if (privacy) {
-        const privacyRes = await fetch('http://localhost:3000/api/users/me/privacy', {
+        const privacyRes = await apiFetch('/api/users/me/privacy', {
           method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
           body: JSON.stringify(privacy),
         })
         const privacyResult = await privacyRes.json()

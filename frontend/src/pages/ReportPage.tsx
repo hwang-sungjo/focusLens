@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Line } from 'react-chartjs-2'
+import { apiFetch } from '../api'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -54,11 +55,8 @@ function ReportPage() {
 
   useEffect(() => {
     const fetchSessions = async () => {
-      const token = localStorage.getItem('access_token')
       try {
-        const res = await fetch('http://localhost:3000/api/sessions?status=COMPLETED', {
-          headers: { Authorization: `Bearer ${token}` },
-        })
+        const res = await apiFetch('/api/sessions?status=COMPLETED')
         const result = await res.json()
         if (!res.ok) {
           setError(result.error || '세션 목록을 불러오지 못했습니다.')
@@ -79,12 +77,9 @@ function ReportPage() {
     setSelectedSessionId(sessionId)
     setReport(null)
     setError('')
-    const token = localStorage.getItem('access_token')
-
+    
     try {
-      const res = await fetch(`http://localhost:3000/api/reports/${sessionId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
+      const res = await apiFetch(`/api/reports/${sessionId}`)
       const result = await res.json()
       if (!res.ok) {
         setError(result.error || '리포트를 불러오지 못했습니다.')

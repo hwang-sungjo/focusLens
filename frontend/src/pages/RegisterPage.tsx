@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
+import { apiFetch } from '../api'
 
 function RegisterPage() {
   const [email, setEmail] = useState('')
@@ -28,10 +29,10 @@ function RegisterPage() {
     }
 
     try {
-      const res = await fetch('http://localhost:3000/api/auth/register', {
+      const res = await apiFetch('/api/auth/register', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password, name, nickname }),
+        skipAuthRefresh: true,
       })
 
       const result = await res.json()

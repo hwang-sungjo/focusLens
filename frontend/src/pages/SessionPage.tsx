@@ -1,4 +1,5 @@
 import { useRef, useState, useEffect } from 'react'
+import { apiFetch } from '../api'
 
 interface FocusResult {
   focus_score: number
@@ -59,7 +60,6 @@ function SessionPage() {
     if (sessionStatus !== 'in_progress' || !sessionId) return
 
     const sendDummyLog = async () => {
-      const token = localStorage.getItem('access_token')
       const round2 = (v: number) => Math.round(v * 100) / 100
       const gaze = round2(Math.random() * 100)
       const blink = round2(Math.random() * 100)
@@ -67,12 +67,8 @@ function SessionPage() {
       const total = round2(gaze * 0.4 + blink * 0.3 + head * 0.3)
 
       try {
-        const res = await fetch(`http://localhost:3000/api/sessions/${sessionId}/log`, {
+        const res = await apiFetch(`/api/sessions/${sessionId}/log`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
           body: JSON.stringify({ gaze, blink, head, total, face_detected: true }),
         })
         const result = await res.json()
@@ -103,15 +99,10 @@ function SessionPage() {
 
   const handleStartSession = async () => {
     setSessionError('')
-    const token = localStorage.getItem('access_token')
 
     try {
-      const res = await fetch('http://localhost:3000/api/sessions/start', {
+      const res = await apiFetch('/api/sessions/start', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
         body: JSON.stringify({}),
       })
 
@@ -135,13 +126,9 @@ function SessionPage() {
   const handleEndSession = async () => {
     if (!sessionId) return
     setSessionError('')
-    const token = localStorage.getItem('access_token')
 
     try {
-      const res = await fetch(`http://localhost:3000/api/sessions/${sessionId}/end`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      })
+      const res = await apiFetch(`/api/sessions/${sessionId}/end`, { method: 'POST' })
 
       const result = await res.json()
 

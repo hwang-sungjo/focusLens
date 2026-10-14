@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Line } from 'react-chartjs-2'
+import { apiFetch } from '../api'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -32,11 +33,8 @@ function DashboardPage() {
 
   useEffect(() => {
     const fetchWeekly = async () => {
-      const token = localStorage.getItem('access_token')
       try {
-        const res = await fetch('http://localhost:3000/api/reports/weekly', {
-          headers: { Authorization: `Bearer ${token}` },
-        })
+        const res = await apiFetch('/api/reports/weekly')
         const result = await res.json()
 
         if (!res.ok) {

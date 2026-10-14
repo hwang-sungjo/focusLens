@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
+import { apiFetch } from '../api'
 
 function LoginPage() {
   const [email, setEmail] = useState('')
@@ -8,6 +9,7 @@ function LoginPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const justRegistered = searchParams.get('registered') === 'true'
+  const sessionExpired = searchParams.get('expired') === 'true'
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -24,10 +26,10 @@ function LoginPage() {
     }
 
     try {
-      const res = await fetch('http://localhost:3000/api/auth/login', {
+      const res = await apiFetch('/api/auth/login', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
+        skipAuthRefresh: true,
       })
 
       const result = await res.json()
@@ -58,6 +60,12 @@ function LoginPage() {
         {justRegistered && (
           <p className="text-green-600 text-sm text-center mb-3">
             회원가입이 완료되었습니다. 로그인해주세요.
+          </p>
+        )}
+
+        {sessionExpired && !error && (
+          <p className="text-red-600 text-sm text-center mb-3">
+            로그인 시간이 만료되었습니다. 다시 로그인해주세요.
           </p>
         )}
         
