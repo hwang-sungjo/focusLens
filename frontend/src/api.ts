@@ -13,6 +13,30 @@ interface ApiOptions extends RequestInit {
   skipAuthRefresh?: boolean
 }
 
+// 응답 본문을 JSON으로 읽는다. 서버 앞단 장애 등으로 JSON이 아니면 null을 돌려준다
+export function readJson(res: Response) {
+  return res.json().catch(() => null)
+}
+
+// 상태 코드별 화면 문구 (docs/frontend-api-map.md 3절 HTTP 오류 UX)
+// 500·503은 X-Request-ID를 붙여 서버 로그와 대조할 수 있게 한다 (같은 문서 2절)
+export function getErrorMessage(
+  res: Response,
+  result: { error?: string } | null,
+  fallback: string,
+): string {
+  const serverMessage = result?.error || ''
+  const requestId = res.headers.get('X-Request-ID')
+  const withId = (message: string) => (requestId ? `${message} (요청 ID: ${requestId})` : message)
+
+  if (res.status === 403) return '이 작업을 할 권한이 없습니다.'
+  if (res.status === 404) return serverMessage || '요청한 정보를 찾을 수 없습니다.'
+  if (res.status === 503) return withId('서비스가 일시적으로 불안정합니다. 잠시 후 다시 시도해주세요.')
+  if (res.status >= 500) return withId('일시적인 오류가 발생했습니다.')
+  // 400·409 등: 서버가 준 구체적인 문구(입력 오류, 중복 등)를 그대로 보여준다
+  return serverMessage || fallback
+}
+
 export function clearAuth() {
   localStorage.removeItem('access_token')
   localStorage.removeItem('user_id')

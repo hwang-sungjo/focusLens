@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Line } from 'react-chartjs-2'
-import { apiFetch } from '../api'
+import { apiFetch, readJson, getErrorMessage } from '../api'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -52,26 +52,37 @@ function ReportPage() {
   const [report, setReport] = useState<ReportDetail | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  const [listFailed, setListFailed] = useState(false) // 세션 목록 불러오기 실패 → 다시 시도 버튼
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
     const fetchSessions = async () => {
       try {
         const res = await apiFetch('/api/sessions?status=COMPLETED')
-        const result = await res.json()
+        const result = await readJson(res)
         if (!res.ok) {
-          setError(result.error || '세션 목록을 불러오지 못했습니다.')
+          setError(getErrorMessage(res, result, '세션 목록을 불러오지 못했습니다.'))
+          setListFailed(true)
           return
         }
         setSessions(result.data.sessions)
       } catch (err) {
         setError('서버에 연결할 수 없습니다.')
+        setListFailed(true)
       } finally {
         setLoading(false)
       }
     }
 
     fetchSessions()
-  }, [])
+  }, [reloadKey])
+
+  const handleRetry = () => {
+    setError('')
+    setListFailed(false)
+    setLoading(true)
+    setReloadKey((k) => k + 1)
+  }
 
   const handleSelectSession = async (sessionId: string) => {
     setSelectedSessionId(sessionId)
@@ -80,9 +91,9 @@ function ReportPage() {
 
     try {
       const res = await apiFetch(`/api/reports/${sessionId}`)
-      const result = await res.json()
+      const result = await readJson(res)
       if (!res.ok) {
-        setError(result.error || '리포트를 불러오지 못했습니다.')
+        setError(getErrorMessage(res, result, '리포트를 불러오지 못했습니다.'))
         return
       }
       setReport(result.data)
@@ -101,7 +112,16 @@ function ReportPage() {
       <h1 className="text-2xl font-bold text-primary mb-6">리포트</h1>
 
       {loading && <p className="text-secondary">불러오는 중...</p>}
-      {error && <p className="text-red-600 mb-4">{error}</p>}
+      {error && (
+        <div className="flex items-center gap-3 mb-4">
+          <p className="text-red-600">{error}</p>
+          {listFailed && (
+            <button onClick={handleRetry} className="text-sm text-secondary underline shrink-0">
+              다시 시도
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="flex gap-6 flex-wrap">
         {/* 세션 목록 */}

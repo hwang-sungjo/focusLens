@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Line } from 'react-chartjs-2'
-import { apiFetch } from '../api'
+import { apiFetch, readJson, getErrorMessage } from '../api'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -30,15 +30,16 @@ function DashboardPage() {
   const [data, setData] = useState<WeeklyData | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  const [reloadKey, setReloadKey] = useState(0) // 값이 바뀌면 다시 불러온다
 
   useEffect(() => {
     const fetchWeekly = async () => {
       try {
         const res = await apiFetch('/api/reports/weekly')
-        const result = await res.json()
+        const result = await readJson(res)
 
         if (!res.ok) {
-          setError(result.error || '데이터를 불러오지 못했습니다.')
+          setError(getErrorMessage(res, result, '데이터를 불러오지 못했습니다.'))
           return
         }
 
@@ -51,7 +52,13 @@ function DashboardPage() {
     }
 
     fetchWeekly()
-  }, [])
+  }, [reloadKey])
+
+  const handleRetry = () => {
+    setError('')
+    setLoading(true)
+    setReloadKey((k) => k + 1)
+  }
 
   const formatDuration = (seconds: number) => {
     const hours = Math.floor(seconds / 3600)
@@ -64,7 +71,14 @@ function DashboardPage() {
       <h1 className="text-2xl font-bold text-primary mb-6">대시보드</h1>
 
       {loading && <p className="text-secondary">불러오는 중...</p>}
-      {error && <p className="text-red-600">{error}</p>}
+      {error && (
+        <div className="flex items-center gap-3 mb-4">
+          <p className="text-red-600">{error}</p>
+          <button onClick={handleRetry} className="text-sm text-secondary underline shrink-0">
+            다시 시도
+          </button>
+        </div>
+      )}
 
       {data && (
         <>

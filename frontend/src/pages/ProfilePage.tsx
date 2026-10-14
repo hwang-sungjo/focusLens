@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { apiFetch } from '../api'
+import { apiFetch, readJson, getErrorMessage } from '../api'
 
 interface Profile {
   user_id: string
@@ -23,6 +23,8 @@ function ProfilePage() {
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [saving, setSaving] = useState(false)
+  const [loadFailed, setLoadFailed] = useState(false) // 불러오기 실패 → 다시 시도 버튼
+  const [reloadKey, setReloadKey] = useState(0)
 
   const userId = localStorage.getItem('user_id')
 
@@ -30,24 +32,38 @@ function ProfilePage() {
     const fetchData = async () => {
       try {
         const profileRes = await apiFetch(`/api/users/${userId}/profile`)
-        const profileResult: { data: Profile } = await profileRes.json()
-        if (profileRes.ok) {
-          setNickname(profileResult.data.nickname)
-          setBio(profileResult.data.bio || '')
+        const profileResult = await readJson(profileRes)
+        if (!profileRes.ok) {
+          setError(getErrorMessage(profileRes, profileResult, '프로필을 불러오지 못했습니다.'))
+          setLoadFailed(true)
+          return
         }
+        const profile: Profile = profileResult.data
+        setNickname(profile.nickname)
+        setBio(profile.bio || '')
 
         const privacyRes = await apiFetch('/api/users/me/privacy')
-        const privacyResult = await privacyRes.json()
-        if (privacyRes.ok) {
-          setPrivacy(privacyResult.data)
+        const privacyResult = await readJson(privacyRes)
+        if (!privacyRes.ok) {
+          setError(getErrorMessage(privacyRes, privacyResult, '프라이버시 설정을 불러오지 못했습니다.'))
+          setLoadFailed(true)
+          return
         }
+        setPrivacy(privacyResult.data)
       } catch (err) {
-        setError('정보를 불러오지 못했습니다.')
+        setError('서버에 연결할 수 없습니다.')
+        setLoadFailed(true)
       }
     }
 
     fetchData()
-  }, [])
+  }, [reloadKey])
+
+  const handleRetry = () => {
+    setError('')
+    setLoadFailed(false)
+    setReloadKey((k) => k + 1)
+  }
 
   const handleSaveAll = async () => {
     setError('')
@@ -59,9 +75,9 @@ function ProfilePage() {
         method: 'PATCH',
         body: JSON.stringify({ nickname, bio }),
       })
-      const profileResult = await profileRes.json()
+      const profileResult = await readJson(profileRes)
       if (!profileRes.ok) {
-        setError(profileResult.error || '프로필 저장에 실패했습니다.')
+        setError(getErrorMessage(profileRes, profileResult, '프로필 저장에 실패했습니다.'))
         setSaving(false)
         return
       }
@@ -71,9 +87,9 @@ function ProfilePage() {
           method: 'PATCH',
           body: JSON.stringify(privacy),
         })
-        const privacyResult = await privacyRes.json()
+        const privacyResult = await readJson(privacyRes)
         if (!privacyRes.ok) {
-          setError(privacyResult.error || '프라이버시 설정 저장에 실패했습니다.')
+          setError(getErrorMessage(privacyRes, privacyResult, '프라이버시 설정 저장에 실패했습니다.'))
           setSaving(false)
           return
         }
@@ -98,7 +114,16 @@ function ProfilePage() {
     <div className="min-h-screen bg-bg p-6">
       <h1 className="text-2xl font-bold text-primary mb-6">프로필 / 설정</h1>
 
-      {error && <p className="text-red-600 mb-4">{error}</p>}
+      {error && (
+        <div className="flex items-center gap-3 mb-4">
+          <p className="text-red-600">{error}</p>
+          {loadFailed && (
+            <button onClick={handleRetry} className="text-sm text-secondary underline shrink-0">
+              다시 시도
+            </button>
+          )}
+        </div>
+      )}
       {message && <p className="text-green-600 mb-4">{message}</p>}
 
       <div className="max-w-xl space-y-6">

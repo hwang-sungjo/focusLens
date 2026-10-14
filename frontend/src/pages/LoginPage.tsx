@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
-import { apiFetch } from '../api'
+import { apiFetch, readJson, getErrorMessage } from '../api'
 
 function LoginPage() {
   const [email, setEmail] = useState('')
@@ -32,10 +32,10 @@ function LoginPage() {
         skipAuthRefresh: true,
       })
 
-      const result = await res.json()
+      const result = await readJson(res)
 
       if (!res.ok) {
-        setError(result.error || '로그인에 실패했습니다.')
+        setError(getErrorMessage(res, result, '로그인에 실패했습니다.'))
         return
       }
 

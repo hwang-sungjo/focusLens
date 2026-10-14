@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect } from 'react'
-import { apiFetch } from '../api'
+import { apiFetch, readJson, getErrorMessage } from '../api'
 
 interface FocusResult {
   focus_score: number
@@ -19,7 +19,7 @@ interface PendingSession {
 async function fetchInProgressSession(): Promise<PendingSession | null> {
   try {
     const res = await apiFetch('/api/sessions?status=IN_PROGRESS&limit=1')
-    const result = await res.json()
+    const result = await readJson(res)
     if (res.ok && result.data.sessions.length > 0) {
       const s = result.data.sessions[0]
       return { session_id: s.session_id, started_at: s.started_at }
@@ -43,6 +43,7 @@ function SessionPage() {
   const [latestResult, setLatestResult] = useState<FocusResult | null>(null)
   const [showAlert, setShowAlert] = useState(false)
   const [pendingSession, setPendingSession] = useState<PendingSession | null>(null)
+  const [logError, setLogError] = useState('') // 1분 로그 전송 실패 안내 (세션은 계속 진행)
 
   useEffect(() => {
     let stream: MediaStream
@@ -100,19 +101,25 @@ function SessionPage() {
           method: 'POST',
           body: JSON.stringify({ gaze, blink, head, total, face_detected: true }),
         })
-        const result = await res.json()
-        if (res.ok) {
-          setLatestResult({
-            focus_score: result.data.focus_score,
-            attention_state: result.data.attention_state,
-            gaze,
-            blink,
-            head,
-          })
-          setShowAlert(result.data.attention_state === 'DISTRACTED')
+        const result = await readJson(res)
+        const time = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
+        if (!res.ok) {
+          setLogError(`${time} 기록 전송 실패: ${getErrorMessage(res, result, '알 수 없는 오류')}`)
+          return
         }
+        setLogError('')
+        setLatestResult({
+          focus_score: result.data.focus_score,
+          attention_state: result.data.attention_state,
+          gaze,
+          blink,
+          head,
+        })
+        setShowAlert(result.data.attention_state === 'DISTRACTED')
       } catch (err) {
         console.error('로그 전송 실패:', err)
+        const time = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
+        setLogError(`${time} 기록 전송 실패: 서버에 연결할 수 없습니다.`)
       }
     }
 
@@ -135,7 +142,7 @@ function SessionPage() {
         body: JSON.stringify({}),
       })
 
-      const result = await res.json()
+      const result = await readJson(res)
 
       if (res.status === 409) {
         // 다른 탭 등에서 시작된 세션이 남아 있는 경우 → 이어하기/종료 안내를 띄운다
@@ -146,7 +153,7 @@ function SessionPage() {
       }
 
       if (!res.ok) {
-        setSessionError(result.error || '세션 시작에 실패했습니다.')
+        setSessionError(getErrorMessage(res, result, '세션 시작에 실패했습니다.'))
         return
       }
 
@@ -155,6 +162,7 @@ function SessionPage() {
       setElapsedSeconds(0)
       setLatestResult(null)
       setShowAlert(false)
+      setLogError('')
     } catch (err) {
       setSessionError('서버에 연결할 수 없습니다.')
     }
@@ -170,6 +178,7 @@ function SessionPage() {
     setLatestResult(null)
     setShowAlert(false)
     setSessionError('')
+    setLogError('')
     setPendingSession(null)
   }
 
@@ -180,11 +189,11 @@ function SessionPage() {
 
     try {
       const res = await apiFetch(`/api/sessions/${pendingSession.session_id}/end`, { method: 'POST' })
-      const result = await res.json()
+      const result = await readJson(res)
 
       // 409(이미 종료됨)도 남은 세션이 없다는 뜻이므로 정리하고 넘어간다
       if (!res.ok && res.status !== 409) {
-        setSessionError(result.error || '이전 세션 종료에 실패했습니다.')
+        setSessionError(getErrorMessage(res, result, '이전 세션 종료에 실패했습니다.'))
         return
       }
 
@@ -202,15 +211,16 @@ function SessionPage() {
     try {
       const res = await apiFetch(`/api/sessions/${sessionId}/end`, { method: 'POST' })
 
-      const result = await res.json()
+      const result = await readJson(res)
 
       if (!res.ok) {
-        setSessionError(result.error || '세션 종료에 실패했습니다.')
+        setSessionError(getErrorMessage(res, result, '세션 종료에 실패했습니다.'))
         return
       }
 
       setSessionStatus('completed')
       setShowAlert(false)
+      setLogError('')
     } catch (err) {
       setSessionError('서버에 연결할 수 없습니다.')
     }
@@ -246,6 +256,8 @@ function SessionPage() {
             <p className="text-3xl font-bold text-primary mt-3">
               {formatTime(elapsedSeconds)}
             </p>
+
+            {logError && <p className="text-sm text-red-600 mt-1">{logError}</p>}
 
             {latestResult && (
               <div className="mt-4">

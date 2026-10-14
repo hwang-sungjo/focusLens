@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { apiFetch } from '../api'
+import { apiFetch, readJson, getErrorMessage } from '../api'
 
 function RegisterPage() {
   const [email, setEmail] = useState('')
@@ -35,10 +35,10 @@ function RegisterPage() {
         skipAuthRefresh: true,
       })
 
-      const result = await res.json()
+      const result = await readJson(res)
 
       if (!res.ok) {
-        setError(result.error || '회원가입에 실패했습니다.')
+        setError(getErrorMessage(res, result, '회원가입에 실패했습니다.'))
         return
       }
       // 의도된 UX: 서버는 가입 응답에 access_token과 Refresh 쿠키를 함께 발급하지만
