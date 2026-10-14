@@ -97,7 +97,7 @@ function DashboardPage() {
           total_study_seconds:
             period === 'weekly' ? d.weekly_total_study_seconds : d.monthly_total_study_seconds,
         })
-      } catch (err) {
+      } catch {
         setError('서버에 연결할 수 없습니다.')
       } finally {
         setLoading(false)

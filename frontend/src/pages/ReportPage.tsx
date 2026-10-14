@@ -187,7 +187,7 @@ function ReportPage() {
           return
         }
         setSessions(result.data.sessions)
-      } catch (err) {
+      } catch {
         setError('서버에 연결할 수 없습니다.')
         setListFailed(true)
       } finally {
@@ -218,7 +218,7 @@ function ReportPage() {
         return
       }
       setReport(result.data)
-    } catch (err) {
+    } catch {
       setError('서버에 연결할 수 없습니다.')
     }
   }

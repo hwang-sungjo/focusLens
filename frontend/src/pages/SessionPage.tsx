@@ -273,7 +273,7 @@ function SessionPage() {
       setShowAlert(false)
       setLogError('')
       resetAlerts()
-    } catch (err) {
+    } catch {
       setSessionError('서버에 연결할 수 없습니다.')
     }
   }
@@ -333,7 +333,7 @@ function SessionPage() {
       setShowAlert(false)
       setLogError('')
       setGuideMessage(null)
-    } catch (err) {
+    } catch {
       setSessionError('서버에 연결할 수 없습니다.')
     }
   }

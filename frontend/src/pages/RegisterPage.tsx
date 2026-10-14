@@ -46,7 +46,7 @@ function RegisterPage() {
       // 로그인 화면에서 방금 만든 계정으로 한 번 더 로그인하도록 한다.
       // 자동 로그인으로 바꾸려면 result.data.access_token / user_id를 localStorage에 저장하고 /dashboard로 이동.
       navigate('/login?registered=true')
-    } catch (err) {
+    } catch {
       setError('서버에 연결할 수 없습니다. 잠시 후 다시 시도해주세요.')
     }
   }

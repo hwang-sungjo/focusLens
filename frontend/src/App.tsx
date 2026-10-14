@@ -20,7 +20,7 @@ function AppContent() {
     try {
       // 401이어도 갱신하지 않음: 어차피 로그아웃할 것이므로 그대로 진행
       await apiFetch('/api/auth/logout', { method: 'POST', skipAuthRefresh: true })
-    } catch (err) {
+    } catch {
       // 서버 요청 실패해도 로컬 토큰은 지운다
     }
     clearAuth()

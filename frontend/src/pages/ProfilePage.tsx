@@ -50,14 +50,14 @@ function ProfilePage() {
           return
         }
         setPrivacy(privacyResult.data)
-      } catch (err) {
+      } catch {
         setError('서버에 연결할 수 없습니다.')
         setLoadFailed(true)
       }
     }
 
     fetchData()
-  }, [reloadKey])
+  }, [reloadKey, userId])
 
   const handleRetry = () => {
     setError('')
@@ -96,7 +96,7 @@ function ProfilePage() {
       }
 
       setMessage('설정이 저장되었습니다.')
-    } catch (err) {
+    } catch {
       setError('서버에 연결할 수 없습니다.')
     } finally {
       setSaving(false)
