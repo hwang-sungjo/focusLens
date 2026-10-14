@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Link, useLocation, Navigate } from 'react-router-dom'
 import LoginPage from './pages/LoginPage'
 import SessionPage from './pages/SessionPage'
 import DashboardPage from './pages/DashboardPage'
@@ -117,6 +117,10 @@ function AppContent() {
       )}
 
       <Routes>
+        {/* 첫 주소: 대시보드로 보냄 (로그인 전이면 ProtectedRoute가 /login으로 보냄) */}
+        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        {/* 없는 주소: 첫 주소로 보냄 */}
+        <Route path="*" element={<Navigate to="/" replace />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
         <Route
