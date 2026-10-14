@@ -41,7 +41,10 @@ function RegisterPage() {
         setError(result.error || '회원가입에 실패했습니다.')
         return
       }
-
+      // 의도된 UX: 서버는 가입 응답에 access_token과 Refresh 쿠키를 함께 발급하지만
+      // (docs/api-spec.md 회원가입, docs/frontend-api-map.md 1절), 가입 직후 자동 로그인하지 않고
+      // 로그인 화면에서 방금 만든 계정으로 한 번 더 로그인하도록 한다.
+      // 자동 로그인으로 바꾸려면 result.data.access_token / user_id를 localStorage에 저장하고 /dashboard로 이동.
       navigate('/login?registered=true')
     } catch (err) {
       setError('서버에 연결할 수 없습니다. 잠시 후 다시 시도해주세요.')
