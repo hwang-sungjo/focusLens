@@ -60,10 +60,11 @@ function SessionPage() {
 
     const sendDummyLog = async () => {
       const token = localStorage.getItem('access_token')
-      const gaze = Math.random() * 100
-      const blink = Math.random() * 100
-      const head = Math.random() * 100
-      const total = (gaze * 0.4 + blink * 0.3 + head * 0.3)
+      const round2 = (v: number) => Math.round(v * 100) / 100
+      const gaze = round2(Math.random() * 100)
+      const blink = round2(Math.random() * 100)
+      const head = round2(Math.random() * 100)
+      const total = round2(gaze * 0.4 + blink * 0.3 + head * 0.3)
 
       try {
         const res = await fetch(`http://localhost:3000/api/sessions/${sessionId}/log`, {
@@ -72,7 +73,7 @@ function SessionPage() {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${token}`,
           },
-          body: JSON.stringify({ gaze, blink, head, total }),
+          body: JSON.stringify({ gaze, blink, head, total, face_detected: true }),
         })
         const result = await res.json()
         if (res.ok) {
