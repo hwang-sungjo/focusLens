@@ -35,11 +35,11 @@ interface ReportDetail {
   session_id: string
   timeline: TimelineEntry[]
   summary_json: {
-    avg_focus_score: number
-    duration_seconds: number
-    gaze_avg: number
-    blink_avg: number
-    head_avg: number
+    avg_focus_score: number | null
+    duration_seconds: number | null
+    gaze_avg: number | null
+    blink_avg: number | null
+    head_avg: number | null
     focused_minutes: number
     normal_minutes: number
     distracted_minutes: number
@@ -77,7 +77,7 @@ function ReportPage() {
     setSelectedSessionId(sessionId)
     setReport(null)
     setError('')
-    
+
     try {
       const res = await apiFetch(`/api/reports/${sessionId}`)
       const result = await res.json()
@@ -141,13 +141,17 @@ function ReportPage() {
               <div>
                 <p className="text-sm text-secondary mb-1">평균 집중도</p>
                 <p className="text-2xl font-bold text-primary">
-                  {report.summary_json.avg_focus_score.toFixed(1)}점
+                  {report.summary_json.avg_focus_score !== null
+                    ? `${report.summary_json.avg_focus_score.toFixed(1)}점`
+                    : '기록 없음'}
                 </p>
               </div>
               <div>
                 <p className="text-sm text-secondary mb-1">학습 시간</p>
                 <p className="text-2xl font-bold text-primary">
-                  {formatDuration(report.summary_json.duration_seconds)}
+                  {report.summary_json.duration_seconds !== null
+                    ? formatDuration(report.summary_json.duration_seconds)
+                    : '기록 없음'}
                 </p>
               </div>
               <div>
