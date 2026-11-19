@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Line } from 'react-chartjs-2'
 import { apiFetch, readJson, getErrorMessage } from '../api'
+import ShareDialog from '../components/ShareDialog'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -199,6 +200,7 @@ function ReportPage() {
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [shareOpen, setShareOpen] = useState(false) // 공유 창 열림 여부
 
   // 처음 들어올 때와 [다시 시도]를 눌렀을 때 첫 페이지부터 불러온다
   useEffect(() => {
@@ -356,12 +358,20 @@ function ReportPage() {
                     minute: '2-digit',
                   })}
               </p>
-              <button
-                onClick={handleSavePdf}
-                className="px-3 py-1.5 rounded-lg text-sm text-secondary border border-accent hover:bg-bg shrink-0 print:hidden"
-              >
-                📄 PDF로 저장
-              </button>
+              <div className="flex gap-2 shrink-0 print:hidden">
+                <button
+                  onClick={() => setShareOpen(true)}
+                  className="px-3 py-1.5 rounded-lg text-sm text-secondary border border-accent hover:bg-bg"
+                >
+                  📤 공유하기
+                </button>
+                <button
+                  onClick={handleSavePdf}
+                  className="px-3 py-1.5 rounded-lg text-sm text-secondary border border-accent hover:bg-bg"
+                >
+                  📄 PDF로 저장
+                </button>
+              </div>
             </div>
             <div className="bg-surface rounded-xl shadow-md print:shadow-none print:border print:border-accent/40 p-6 grid grid-cols-3 gap-4 text-center">
               <div>
@@ -476,6 +486,10 @@ function ReportPage() {
           </div>
         )}
       </div>
+
+      {shareOpen && selectedSessionId && (
+        <ShareDialog sessionId={selectedSessionId} onClose={() => setShareOpen(false)} />
+      )}
     </div>
   )
 }
