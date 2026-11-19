@@ -3,13 +3,15 @@ import { Link, useParams } from 'react-router-dom'
 import { apiFetch, readJson, getErrorMessage } from '../api'
 import { GROUP_TYPE_LABEL, ROLE_LABEL, VISIBILITY_LABEL, type GroupDetail } from '../groups'
 import MembersTab from '../components/group/MembersTab'
+import GoalsTab from '../components/group/GoalsTab'
+import FeedbackTab from '../components/group/FeedbackTab'
 
 // 그룹 상세 화면 (/groups/:id, GET /api/groups/:id)
 // 위쪽: 그룹 이름·소개·종류·내 역할 / 아래쪽: 탭
 // 탭 내용은 components/group/ 아래 파일로 나눠 둔다
 
-type Tab = 'members'
-const TAB_LABEL: Record<Tab, string> = { members: '멤버' }
+type Tab = 'members' | 'goals' | 'feedbacks'
+const TAB_LABEL: Record<Tab, string> = { members: '멤버', goals: '목표', feedbacks: '피드백' }
 
 type LoadResult = { ok: true; group: GroupDetail } | { ok: false; message: string }
 
@@ -114,6 +116,8 @@ function GroupDetailPage() {
                 {tab === 'members' && (
                   <MembersTab groupId={group.group_id} myRole={group.my_role} onGroupChanged={handleRetry} />
                 )}
+                {tab === 'goals' && <GoalsTab groupId={group.group_id} myRole={group.my_role} />}
+                {tab === 'feedbacks' && <FeedbackTab groupId={group.group_id} myRole={group.my_role} />}
               </>
             )}
           </>

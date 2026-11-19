@@ -1,3 +1,5 @@
+import { apiFetch, readJson } from './api'
+
 // 그룹 관련 공통 타입·문구 (그룹 목록·그룹 상세 화면이 같이 쓴다)
 // 서버 응답 모양은 backend/src/controllers/groupsController.js 기준
 
@@ -58,4 +60,37 @@ export function formatStudyTime(seconds: number) {
   const hours = Math.floor(seconds / 3600)
   const minutes = Math.floor((seconds % 3600) / 60)
   return hours > 0 ? `${hours}시간 ${minutes}분` : `${minutes}분`
+}
+
+// 그룹 목표 (GET /api/groups/:id/goals 의 한 줄)
+export type GoalStatus = 'ACTIVE' | 'COMPLETED' | 'CANCELLED'
+export interface GroupGoal {
+  goal_id: string
+  title: string
+  description: string | null
+  target_study_minutes: number | null
+  target_focus_score: number | null
+  start_date: string // YYYY-MM-DD
+  end_date: string
+  status: GoalStatus
+  assignee_count: number // 0이면 그룹 전체 대상
+  is_assigned_to_me: boolean
+  created_at: string
+}
+export const GOAL_STATUS_LABEL: Record<GoalStatus, string> = {
+  ACTIVE: '진행 중',
+  COMPLETED: '완료',
+  CANCELLED: '취소',
+}
+
+// 멤버 명단 불러오기 (목표 배정·피드백 대상 고르기용)
+// 멤버 목록 API가 따로 없어서 대시보드 API를 쓴다 → 방장·매니저만 전체 명단을 받는다
+export async function loadGroupMembers(groupId: string): Promise<GroupMember[]> {
+  try {
+    const res = await apiFetch(`/api/groups/${groupId}/dashboard?limit=100`)
+    const result = await readJson(res)
+    return res.ok ? result.data.members : []
+  } catch {
+    return []
+  }
 }
