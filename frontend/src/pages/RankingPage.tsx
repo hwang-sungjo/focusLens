@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { apiFetch, readJson, getErrorMessage } from '../api'
+import FriendButton from '../components/FriendButton'
+import { loadFriendStatus, type FriendStatus } from '../friends'
 
 // 랭킹 화면 (GET /api/rankings, docs/api-spec.md)
 // - 누구끼리(scope) · 기간(period) · 기준(metric) 세 가지를 골라 순위를 본다
@@ -83,6 +85,20 @@ function RankingPage() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [reloadKey, setReloadKey] = useState(0)
+  // 친구 관계 표 (user_id → 친구/요청 보냄/요청 받음). [+ 친구] 버튼 표시에 쓴다
+  const [friendStatus, setFriendStatus] = useState<Map<string, FriendStatus>>(new Map())
+
+  // 화면에 들어올 때 내 친구·대기 요청을 한 번 불러온다
+  useEffect(() => {
+    const fetchFriendStatus = async () => {
+      setFriendStatus(await loadFriendStatus())
+    }
+    fetchFriendStatus()
+  }, [])
+
+  // 요청을 보내면 그 사람을 '요청 보냄'으로 바꾼다
+  const markSent = (userId: string) =>
+    setFriendStatus((prev) => new Map(prev).set(userId, 'sent'))
 
   // 그룹 랭킹에서 고를 수 있게 내가 속한 그룹 목록을 한 번 불러온다
   useEffect(() => {
@@ -257,6 +273,13 @@ function RankingPage() {
                           {r.nickname}
                           {isMe && <span className="ml-1 text-xs text-secondary">(나)</span>}
                         </span>
+                        {!isMe && (
+                          <FriendButton
+                            userId={r.user_id}
+                            status={friendStatus.get(r.user_id) ?? 'none'}
+                            onSent={markSent}
+                          />
+                        )}
                         {/* 좁은 화면에서는 닉네임 자리를 위해 세션 수를 숨긴다 */}
                         <span className="hidden sm:inline text-xs text-secondary shrink-0">
                           세션 {r.session_count}개

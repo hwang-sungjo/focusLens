@@ -9,6 +9,7 @@ import ProtectedRoute from './ProtectedRoute'
 import RegisterPage from './pages/RegisterPage'
 import RankingPage from './pages/RankingPage'
 import FeedPage from './pages/FeedPage'
+import FriendsPage from './pages/FriendsPage'
 import { apiFetch, clearAuth } from './api'
 
 // 위쪽 메뉴 목록 (넓은 화면·좁은 화면 메뉴가 같이 쓴다). 새 화면은 여기에 한 줄만 추가하면 된다.
@@ -18,6 +19,7 @@ const NAV_LINKS = [
   { to: '/reports', label: '리포트' },
   { to: '/feed', label: '피드' },
   { to: '/rankings', label: '랭킹' },
+  { to: '/friends', label: '친구' },
 ]
 
 function AppContent() {
@@ -156,6 +158,14 @@ function AppContent() {
           element={
             <ProtectedRoute>
               <RankingPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/friends"
+          element={
+            <ProtectedRoute>
+              <FriendsPage />
             </ProtectedRoute>
           }
         />

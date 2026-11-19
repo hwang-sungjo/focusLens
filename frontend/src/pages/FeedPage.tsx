@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { apiFetch, readJson, getErrorMessage } from '../api'
+import FriendButton from '../components/FriendButton'
+import { loadFriendStatus, type FriendStatus } from '../friends'
 
 // 소셜 피드 화면 (GET /api/session-shares/feed, 반응 POST·DELETE /api/session-shares/:id/reactions)
 // - 전체(all): 전체 공개 + 친구 공유 + 내 그룹 공유 + 내가 공유한 것
@@ -89,6 +91,20 @@ function FeedPage() {
   const [loadingMore, setLoadingMore] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
   const [pendingReaction, setPendingReaction] = useState<string | null>(null) // 처리 중인 "share_id:type"
+  // 친구 관계 표 (user_id → 친구/요청 보냄/요청 받음). [+ 친구] 버튼 표시에 쓴다
+  const [friendStatus, setFriendStatus] = useState<Map<string, FriendStatus>>(new Map())
+
+  // 화면에 들어올 때 내 친구·대기 요청을 한 번 불러온다
+  useEffect(() => {
+    const fetchFriendStatus = async () => {
+      setFriendStatus(await loadFriendStatus())
+    }
+    fetchFriendStatus()
+  }, [])
+
+  // 요청을 보내면 그 사람을 '요청 보냄'으로 바꾼다
+  const markSent = (userId: string) =>
+    setFriendStatus((prev) => new Map(prev).set(userId, 'sent'))
 
   // 탭을 바꾸거나 다시 시도하면 첫 페이지부터 불러온다
   useEffect(() => {
@@ -245,6 +261,13 @@ function FeedPage() {
                     {formatDate(item.created_at)} · {SHARE_SCOPE_LABEL[item.share_scope]}
                   </p>
                 </div>
+                {!isMine && (
+                  <FriendButton
+                    userId={item.owner.user_id}
+                    status={friendStatus.get(item.owner.user_id) ?? 'none'}
+                    onSent={markSent}
+                  />
+                )}
               </div>
 
               {/* 한마디 (React가 글자로 표시하므로 HTML·스크립트는 실행되지 않는다) */}
