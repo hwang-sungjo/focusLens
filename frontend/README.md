@@ -34,6 +34,7 @@ React와 TypeScript로 만든 FocusLens 웹 화면입니다. 백엔드 API(`back
 - 알림 횟수, 대기 시간, 안내 문구는 `SessionPage.tsx` 위쪽 설정 블록에서 바꿀 수 있습니다.
 
 **리포트**
+- 완료 세션 목록은 20개씩 불러오고, 더 있으면 아래 [더 보기] 버튼으로 다음 20개를 이어 붙입니다(`page`·`limit`, 서버가 알려 주는 전체 개수 기준).
 - 세션 요약(날짜, 학습 시간, 평균 집중도)
 - 분 단위 집중도 면적 그래프와 Gaze/Blink/Head 꺾은선
 - 집중 TOP3 / 이탈 TOP3 구간 카드: 같은 상태가 이어진 구간을 길이순으로 정렬하고, 길이가 같으면 평균 점수로 정렬합니다.
@@ -156,7 +157,7 @@ frontend/
 
 **공통 API 클라이언트 (`src/api.ts`)**
 - 모든 요청은 `apiFetch(path, options)`를 씁니다. 주소, `Authorization` 헤더, 쿠키 전송(`credentials: 'include'`)을 자동으로 처리합니다.
-- **401:** Refresh Token(HttpOnly 쿠키)으로 한 번 갱신한 뒤 원래 요청을 한 번 다시 보냅니다. 갱신에 실패하면 `/login?expired=true`로 이동합니다(`docs/auth-flow.md` 7절). 여러 요청이 동시에 401을 받아도 갱신은 한 번만 합니다. 같은 Refresh Token을 두 번 쓰면 서버가 재사용으로 판단해 로그인 전체를 폐기하기 때문입니다.
+- **401:** Refresh Token(HttpOnly 쿠키)으로 한 번 갱신한 뒤 원래 요청을 한 번 다시 보냅니다. Refresh Token이 무효(만료·폐기)일 때만 `/login?expired=true`로 이동합니다(`docs/auth-flow.md` 7절). 서버 장애(5xx)나 네트워크 끊김으로 갱신하지 못하면 로그아웃하지 않고 화면에 오류 문구를 보여 줍니다. 잠깐의 장애로 로그인이 풀리지 않게 하기 위해서입니다. 여러 요청이 동시에 401을 받아도 갱신은 한 번만 합니다. 같은 Refresh Token을 두 번 쓰면 서버가 재사용으로 판단해 로그인 전체를 폐기하기 때문입니다.
 - 로그인·회원가입·로그아웃은 `skipAuthRefresh: true`로 갱신을 건너뜁니다. 여기서 받는 401은 만료가 아니라 인증 실패이기 때문입니다.
 - **오류 문구:** `getErrorMessage()`가 상태 코드별 문구를 만듭니다. 400·409는 서버 문구를 그대로 쓰고, 403은 권한 안내를, 500·503은 `X-Request-ID`를 함께 보여줍니다(`docs/frontend-api-map.md` 2·3절). 데이터를 불러오는 화면에는 [다시 시도] 버튼이 있습니다.
 
