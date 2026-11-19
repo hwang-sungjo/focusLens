@@ -49,6 +49,7 @@ interface Segment {
 }
 
 const TOP_COUNT = 3
+const PAGE_SIZE = 20 // 완료 세션 목록을 한 번에 불러오는 개수 (서버 기본값과 같음)
 
 // 타임라인을 앞에서부터 훑으며 같은 상태가 이어진 덩어리를 만든다.
 // 상태가 바뀌거나, 분이 건너뛰어지면(기록 누락) 덩어리를 끊는다.
@@ -167,6 +168,25 @@ interface ReportDetail {
   }
 }
 
+type SessionPageResult =
+  | { ok: true; rows: SessionSummary[]; total: number }
+  | { ok: false; message: string }
+
+// 완료 세션 목록 한 페이지 요청 (서버는 page·limit을 받고 전체 개수 pagination.total을 돌려준다)
+async function loadSessionPage(pageNo: number): Promise<SessionPageResult> {
+  try {
+    const res = await apiFetch(`/api/sessions?status=COMPLETED&page=${pageNo}&limit=${PAGE_SIZE}`)
+    const result = await readJson(res)
+    if (!res.ok) {
+      return { ok: false, message: getErrorMessage(res, result, '세션 목록을 불러오지 못했습니다.') }
+    }
+    const rows: SessionSummary[] = result.data.sessions
+    return { ok: true, rows, total: result.data.pagination?.total ?? rows.length }
+  } catch {
+    return { ok: false, message: '서버에 연결할 수 없습니다.' }
+  }
+}
+
 function ReportPage() {
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
@@ -175,28 +195,52 @@ function ReportPage() {
   const [loading, setLoading] = useState(true)
   const [listFailed, setListFailed] = useState(false) // 세션 목록 불러오기 실패 → 다시 시도 버튼
   const [reloadKey, setReloadKey] = useState(0)
+  // 세션 목록 페이지 처리: 지금까지 불러온 페이지 번호, 서버가 알려준 전체 개수, 더 보기 진행 중 여부
+  const [page, setPage] = useState(1)
+  const [total, setTotal] = useState(0)
+  const [loadingMore, setLoadingMore] = useState(false)
 
+  // 처음 들어올 때와 [다시 시도]를 눌렀을 때 첫 페이지부터 불러온다
   useEffect(() => {
-    const fetchSessions = async () => {
-      try {
-        const res = await apiFetch('/api/sessions?status=COMPLETED')
-        const result = await readJson(res)
-        if (!res.ok) {
-          setError(getErrorMessage(res, result, '세션 목록을 불러오지 못했습니다.'))
-          setListFailed(true)
-          return
-        }
-        setSessions(result.data.sessions)
-      } catch {
-        setError('서버에 연결할 수 없습니다.')
+    const fetchFirstPage = async () => {
+      const result = await loadSessionPage(1)
+      if (!result.ok) {
+        setError(result.message)
         setListFailed(true)
-      } finally {
-        setLoading(false)
+      } else {
+        setSessions(result.rows)
+        setTotal(result.total)
+        setPage(1)
       }
+      setLoading(false)
     }
 
-    fetchSessions()
+    fetchFirstPage()
   }, [reloadKey])
+
+  // [더 보기]: 다음 페이지를 불러와 목록 뒤에 이어 붙인다
+  const handleLoadMore = async () => {
+    setError('')
+    setListFailed(false)
+    setLoadingMore(true)
+    const next = page + 1
+    const result = await loadSessionPage(next)
+    if (!result.ok) {
+      setError(result.message)
+      setListFailed(true)
+    } else {
+      // 목록을 보는 사이 새 세션이 끝나면 페이지가 한 칸씩 밀려 같은 세션이 또 올 수 있어 중복은 뺀다
+      setSessions((prev) => {
+        const seen = new Set(prev.map((s) => s.session_id))
+        return [...prev, ...result.rows.filter((r) => !seen.has(r.session_id))]
+      })
+      setTotal(result.total)
+      setPage(next)
+    }
+    setLoadingMore(false)
+  }
+
+  const hasMore = sessions.length < total
 
   const handleRetry = () => {
     setError('')
@@ -277,6 +321,15 @@ function ReportPage() {
               </li>
             ))}
           </ul>
+          {hasMore && (
+            <button
+              onClick={handleLoadMore}
+              disabled={loadingMore}
+              className="w-full mt-3 px-3 py-2 rounded-lg text-sm text-secondary border border-accent hover:bg-bg disabled:opacity-50"
+            >
+              {loadingMore ? '불러오는 중...' : `더 보기 (${sessions.length}/${total})`}
+            </button>
+          )}
         </div>
 
         {/* 상세 리포트 */}
