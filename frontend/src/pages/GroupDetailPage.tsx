@@ -111,7 +111,9 @@ function GroupDetailPage() {
                   ))}
                 </div>
 
-                {tab === 'members' && <MembersTab groupId={group.group_id} myRole={group.my_role} />}
+                {tab === 'members' && (
+                  <MembersTab groupId={group.group_id} myRole={group.my_role} onGroupChanged={handleRetry} />
+                )}
               </>
             )}
           </>
