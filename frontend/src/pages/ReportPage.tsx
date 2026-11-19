@@ -126,7 +126,7 @@ function SegmentCard({
   emptyText: string
 }) {
   return (
-    <div className="bg-surface rounded-xl shadow-md p-5">
+    <div className="bg-surface rounded-xl shadow-md print:shadow-none print:border print:border-accent/40 p-5 break-inside-avoid">
       <p className={`text-sm font-medium mb-3 ${tone === 'good' ? 'text-green-700' : 'text-red-700'}`}>
         {title}
       </p>
@@ -271,18 +271,27 @@ function ReportPage() {
   const rolledUpEntry = report?.timeline.find((t) => t.granularity !== 'MINUTE')
   const rolledUpUnit = rolledUpEntry ? GRANULARITY_LABEL[rolledUpEntry.granularity] : null
 
+  // PDF 첫 줄에 넣을 세션 날짜 (목록에서 선택한 세션을 찾아 쓴다)
+  const selectedSession = sessions.find((s) => s.session_id === selectedSessionId)
+
+  // [PDF로 저장]: 브라우저 인쇄 창을 연다. 인쇄 창에서 "PDF로 저장"을 고르면 파일이 된다.
+  // 메뉴·세션 목록·버튼은 print:hidden으로 인쇄에서 빠진다.
+  const handleSavePdf = () => {
+    window.print()
+  }
+
   const formatDuration = (seconds: number) => {
     const minutes = Math.floor(seconds / 60)
     return `${minutes}분`
   }
 
   return (
-    <div className="min-h-screen bg-bg p-6">
-      <h1 className="text-2xl font-bold text-primary mb-6">리포트</h1>
+    <div className="min-h-screen bg-bg p-6 print:min-h-0 print:p-0 print:bg-white">
+      <h1 className="text-2xl font-bold text-primary mb-6 print:mb-3">리포트</h1>
 
       {loading && <p className="text-secondary">불러오는 중...</p>}
       {error && (
-        <div className="flex items-center gap-3 mb-4">
+        <div className="flex items-center gap-3 mb-4 print:hidden">
           <p className="text-red-600">{error}</p>
           {listFailed && (
             <button onClick={handleRetry} className="text-sm text-secondary underline shrink-0">
@@ -294,7 +303,7 @@ function ReportPage() {
 
       <div className="flex gap-6 flex-wrap">
         {/* 세션 목록 */}
-        <div className="bg-surface rounded-xl shadow-md p-4 w-full sm:w-64">
+        <div className="bg-surface rounded-xl shadow-md p-4 w-full sm:w-64 print:hidden">
           <p className="text-sm font-medium text-primary mb-3">완료된 세션</p>
           {sessions.length === 0 && !loading && (
             <p className="text-sm text-secondary">아직 완료된 세션이 없습니다.</p>
@@ -335,7 +344,26 @@ function ReportPage() {
         {/* 상세 리포트 */}
         {report && (
           <div className="flex-1 min-w-0 space-y-4">
-            <div className="bg-surface rounded-xl shadow-md p-6 grid grid-cols-3 gap-4 text-center">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm text-secondary">
+                {selectedSession &&
+                  new Date(selectedSession.started_at).toLocaleString('ko-KR', {
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric',
+                    weekday: 'short',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}
+              </p>
+              <button
+                onClick={handleSavePdf}
+                className="px-3 py-1.5 rounded-lg text-sm text-secondary border border-accent hover:bg-bg shrink-0 print:hidden"
+              >
+                📄 PDF로 저장
+              </button>
+            </div>
+            <div className="bg-surface rounded-xl shadow-md print:shadow-none print:border print:border-accent/40 p-6 grid grid-cols-3 gap-4 text-center">
               <div>
                 <p className="text-sm text-secondary mb-1">평균 집중도</p>
                 <p className="text-2xl font-bold text-primary">
@@ -360,7 +388,7 @@ function ReportPage() {
               </div>
             </div>
 
-            <div className="bg-surface rounded-xl shadow-md p-6">
+            <div className="bg-surface rounded-xl shadow-md print:shadow-none print:border print:border-accent/40 p-6">
               <p className="text-sm text-secondary mb-4">집중도 타임라인</p>
               {/* B11: 묶인(오래된) 세션 안내 */}
               {rolledUpUnit && (

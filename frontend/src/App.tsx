@@ -30,7 +30,7 @@ function AppContent() {
   return (
     <>
       {!hideNav && isLoggedIn && (
-        <nav className="bg-surface shadow-sm">
+        <nav className="bg-surface shadow-sm print:hidden">
           <div className="flex items-center justify-between px-6 py-3">
             <Link to="/dashboard" className="text-base sm:text-lg font-bold text-primary shrink-0">
               FocusLens
