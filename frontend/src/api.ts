@@ -4,7 +4,8 @@
 // 1. 주소: 환경변수 VITE_API_BASE_URL (없으면 로컬 백엔드 주소)
 // 2. 토큰: localStorage의 access_token을 Authorization 헤더에 자동 첨부
 // 3. 401: Refresh Token(HttpOnly 쿠키)으로 1회 갱신 → 원 요청 1회 재시도
-//         갱신 실패 시 토큰 삭제 → 로그인 화면으로 이동
+//         Refresh Token이 무효일 때만 토큰 삭제 → 로그인 화면으로 이동
+//         서버 장애·네트워크 끊김이면 로그아웃하지 않고 오류로 돌려준다
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000'
 
@@ -58,24 +59,41 @@ function send(path: string, init: RequestInit): Promise<Response> {
   })
 }
 
+// 갱신 결과
+// - ok: 새 Access Token 저장 완료
+// - expired: Refresh Token이 무효(만료·폐기·재사용) → 다시 로그인해야 함
+// - unavailable: 서버 장애(5xx 등)나 네트워크 끊김 → 로그인은 유효할 수 있으므로 로그아웃하지 않음
+type RefreshResult =
+  | { kind: 'ok' }
+  | { kind: 'expired' }
+  | { kind: 'unavailable'; status: number | null; requestId: string | null }
+
 // 동시에 여러 요청이 401을 받아도 갱신은 한 번만 하도록 공유하는 Promise
 // (같은 Refresh Token을 두 번 쓰면 서버가 재사용으로 판단해 로그인 전체를 폐기한다)
-let refreshing: Promise<boolean> | null = null
+let refreshing: Promise<RefreshResult> | null = null
 
-function refreshAccessToken(): Promise<boolean> {
+function refreshAccessToken(): Promise<RefreshResult> {
   if (!refreshing) {
-    refreshing = (async () => {
+    refreshing = (async (): Promise<RefreshResult> => {
       try {
         const res = await fetch(`${BASE_URL}/api/auth/refresh`, {
           method: 'POST',
           credentials: 'include',
         })
-        if (!res.ok) return false
-        const result = await res.json()
-        localStorage.setItem('access_token', result.data.access_token)
-        return true
+        if (res.ok) {
+          const result = await readJson(res)
+          const token = result?.data?.access_token
+          if (!token) return { kind: 'unavailable', status: res.status, requestId: null }
+          localStorage.setItem('access_token', token)
+          return { kind: 'ok' }
+        }
+        // 400·401·403: Refresh Token 자체가 무효 → 재로그인
+        if (res.status < 500 && res.status !== 429) return { kind: 'expired' }
+        // 429·5xx: 서버 쪽 일시 문제
+        return { kind: 'unavailable', status: res.status, requestId: res.headers.get('X-Request-ID') }
       } catch {
-        return false
+        // 네트워크 끊김, 서버 꺼짐
+        return { kind: 'unavailable', status: null, requestId: null }
       } finally {
         refreshing = null
       }
@@ -95,11 +113,23 @@ export async function apiFetch(path: string, options: ApiOptions = {}): Promise<
 
   // 401 → 갱신 1회 시도
   const refreshed = await refreshAccessToken()
-  if (refreshed) {
+  if (refreshed.kind === 'ok') {
     return send(path, init) // 원 요청 1회 재시도
   }
 
-  // 갱신 실패 → 토큰 삭제 후 로그인 화면으로
+  if (refreshed.kind === 'unavailable') {
+    // 로그인은 그대로 두고, 화면이 평소 오류 처리로 안내하게 한다
+    if (refreshed.status === null) {
+      throw new TypeError('network error') // 각 화면의 catch → "서버에 연결할 수 없습니다"
+    }
+    // 서버 응답(503 등)을 그대로 넘겨 getErrorMessage가 상태별 문구와 요청 ID를 보여주게 한다
+    return new Response(JSON.stringify({ success: false, data: {}, error: '' }), {
+      status: refreshed.status,
+      headers: refreshed.requestId ? { 'X-Request-ID': refreshed.requestId } : {},
+    })
+  }
+
+  // Refresh Token 무효 → 토큰 삭제 후 로그인 화면으로
   clearAuth()
   window.location.href = '/login?expired=true'
   // 이동하는 동안 호출한 화면이 에러 문구를 잠깐 띄우지 않도록 여기서 멈춘다
