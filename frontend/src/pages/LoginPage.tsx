@@ -1,0 +1,123 @@
+import { useState } from 'react'
+import { useNavigate, useSearchParams, Link } from 'react-router-dom'
+import { apiFetch, readJson, getErrorMessage } from '../api'
+
+function LoginPage() {
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const justRegistered = searchParams.get('registered') === 'true'
+  const sessionExpired = searchParams.get('expired') === 'true'
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError('')
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRegex.test(email)) {
+      setError('올바른 이메일 형식을 입력해주세요.')
+      return
+    }
+    if (password.length < 8) {
+      setError('비밀번호는 8자 이상이어야 합니다.')
+      return
+    }
+
+    try {
+      const res = await apiFetch('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ email, password }),
+        skipAuthRefresh: true,
+      })
+
+      const result = await readJson(res)
+
+      if (!res.ok) {
+        setError(getErrorMessage(res, result, '로그인에 실패했습니다.'))
+        return
+      }
+
+      localStorage.setItem('access_token', result.data.access_token)
+      localStorage.setItem('user_id', result.data.user_id)
+      navigate('/dashboard')
+    } catch {
+      setError('서버에 연결할 수 없습니다. 잠시 후 다시 시도해주세요.')
+    }
+  }
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-bg">
+      <div className="bg-surface rounded-xl shadow-md p-8 w-full max-w-sm">
+        <h1 className="text-2xl font-bold text-primary mb-2 text-center">
+          FocusLens
+        </h1>
+        <p className="text-sm text-secondary mb-6 text-center">
+          로그인하고 학습 집중도를 확인하세요
+        </p>
+
+        {justRegistered && (
+          <p className="text-green-600 text-sm text-center mb-3">
+            회원가입이 완료되었습니다. 로그인해주세요.
+          </p>
+        )}
+
+        {sessionExpired && !error && (
+          <p className="text-red-600 text-sm text-center mb-3">
+            로그인 시간이 만료되었습니다. 다시 로그인해주세요.
+          </p>
+        )}
+        
+        {error && (
+          <p className="text-red-600 text-sm text-center mb-3">{error}</p>
+        )}
+
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <div>
+            <label className="block text-sm font-medium text-primary mb-1">
+              이메일
+            </label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-primary mb-1">
+              비밀번호
+            </label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent"
+              required
+            />
+          </div>
+
+          <button
+            type="submit"
+            className="bg-primary text-white rounded-lg py-2 mt-2 hover:bg-secondary transition-colors"
+          >
+            로그인
+          </button>
+        </form>
+        <p className="text-sm text-center text-secondary mt-4">
+          계정이 없으신가요?{' '}
+          <Link to="/register" className="text-primary font-medium underline">
+            회원가입
+          </Link>
+        </p>
+      </div>
+    </div>
+  )
+}
+
+export default LoginPage
