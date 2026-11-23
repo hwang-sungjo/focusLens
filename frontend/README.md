@@ -1,6 +1,6 @@
 # FocusLens Frontend
 
-React와 TypeScript로 만든 FocusLens 웹 화면입니다. 백엔드 API(`backend/`)에 연결해 로그인, 학습 세션, 대시보드, 리포트, 프로필 화면을 제공합니다.
+React와 TypeScript로 만든 FocusLens 웹 화면입니다. 백엔드 API(`backend/`)에 연결해 로그인, 학습 세션, 대시보드, 리포트, 프로필, 소셜(피드·랭킹·친구), 그룹 화면을 제공합니다.
 
 > 작업 브랜치: `uiux`
 
@@ -12,7 +12,12 @@ React와 TypeScript로 만든 FocusLens 웹 화면입니다. 백엔드 API(`back
 | 회원가입 | `/register` | `POST /api/auth/register` |
 | 대시보드 | `/dashboard` | `GET /api/reports/weekly`, `GET /api/reports/monthly` |
 | 학습 세션 | `/session` | `POST /api/sessions/start`, `/:id/log`, `/:id/end`, `GET /api/sessions?status=IN_PROGRESS` |
-| 리포트 | `/reports` | `GET /api/sessions?status=COMPLETED`, `GET /api/reports/:session_id` |
+| 리포트 | `/reports` | `GET /api/sessions?status=COMPLETED`, `GET /api/reports/:session_id`, `POST /api/session-shares` |
+| 피드 | `/feed` | `GET /api/session-shares/feed`, `POST·DELETE /api/session-shares/:id/reactions` |
+| 랭킹 | `/rankings` | `GET /api/rankings` |
+| 친구 | `/friends` | `GET /api/connections`, `POST /api/connections/request`, `PATCH /api/connections/:id` |
+| 그룹 목록 | `/groups` | `GET·POST /api/groups`, `POST /api/groups/join` |
+| 그룹 상세 | `/groups/:id` | `GET /api/groups/:id`, `/dashboard`, `/invite`, `PATCH·DELETE /members/:memberId`, `GET·POST /goals`, `POST /goals/:goalId/assignees`, `GET·POST /feedbacks` |
 | 프로필 / 설정 | `/profile` | `GET /api/users/:id/profile`, `PATCH /api/users/me/profile`, `GET·PATCH /api/users/me/privacy` |
 
 - 로그아웃은 위쪽 메뉴의 👤 버튼에서 `POST /api/auth/logout`을 호출합니다.
@@ -38,14 +43,49 @@ React와 TypeScript로 만든 FocusLens 웹 화면입니다. 백엔드 API(`back
 - 세션 요약(날짜, 학습 시간, 평균 집중도)
 - 분 단위 집중도 면적 그래프와 Gaze/Blink/Head 꺾은선
 - 집중 TOP3 / 이탈 TOP3 구간 카드: 같은 상태가 이어진 구간을 길이순으로 정렬하고, 길이가 같으면 평균 점수로 정렬합니다.
+- **[PDF로 저장]:** 브라우저 인쇄 창을 열고, 인쇄용 스타일(`print:` 클래스, `index.css`의 `@media print`)로 메뉴·세션 목록·버튼을 숨겨 A4 한 장에 리포트만 담습니다. 인쇄 창에서 "PDF로 저장"을 고르면 파일이 됩니다.
+- **[공유하기]:** 전체 공개·친구·그룹 중 범위를 고르고 한마디(500자)를 붙여 공유합니다. 서버 규칙상 프로필의 "기본 세션 공개 범위"보다 넓게는 공유할 수 없어서, 허용되지 않는 범위는 미리 막아 둡니다. 새 계정의 기본값은 비공개라 프로필에서 범위를 넓혀야 공유할 수 있습니다.
 - **30일이 지난 세션:** 서버가 분 단위 기록을 시간·일·주 단위로 합쳐서 보냅니다(Roll-up, `docs/rollup-strategy.md`). 이 경우 "단위 평균으로 표시된다"는 안내를 띄우고 TOP3 카드는 숨깁니다. 구간을 분 단위로 나눌 수 없기 때문입니다.
+
+**피드**
+- 전체(전체 공개 + 친구 + 내 그룹 + 내 글) / 친구 / 공개 탭, 20개씩 [더 보기]
+- 학습 시간·점수는 올린 사람의 공개 설정에 따라 서버가 가려서 보내며, 이때 "비공개"로 표시합니다.
+- 반응 3종(👍 좋아요, 🔥 응원해요, 🤝 공감해요)은 눌러서 추가, 다시 눌러서 취소합니다.
+
+**랭킹**
+- 누구끼리(전체·친구·그룹) × 기간(오늘·최근 7일) × 기준(집중도·학습 시간)을 고릅니다. 상위 50명과 내 순위를 보여 줍니다.
+- 서버가 UTC 날짜로 집계해서 "오늘"은 한국 시간 오전 9시에 새로 시작합니다. "최근 7일"은 오늘 포함 지난 7일입니다.
+- 프로필에서 "랭킹 참여"를 끈 사용자는 순위에 나오지 않습니다(새 계정 기본값은 꺼짐).
+
+**친구**
+- 받은 요청(수락·거절), 보낸 요청(취소), 친구 목록
+- 친구는 **가입할 때 주어지는 고유 ID**(`users.id`)로 추가합니다. "내 ID"를 복사해 상대에게 보내고, 상대의 ID를 붙여넣어 요청합니다. 피드·랭킹의 다른 사람 옆 [+ 친구] 버튼으로도 바로 요청할 수 있습니다. 닉네임 검색은 두지 않기로 했습니다.
+
+**그룹**
+- 그룹 목록·만들기(만든 사람이 방장), 초대 코드로 가입
+- 그룹 상세는 [멤버] [목표] [피드백] 탭으로 나뉩니다. 버튼은 서버 권한 규칙대로 역할별로 다르게 보입니다.
+
+| 기능 | 방장 | 매니저 | 멤버 |
+| --- | --- | --- | --- |
+| 멤버 현황 | 전체 | 전체 | 나만 |
+| 초대 코드 만들기 (친구 중에서·이메일) | ✅ | ✅ | |
+| 역할 변경, 방장 넘기기 | ✅ | | |
+| 내보내기 | 방장 외 모두 | 일반 멤버만 | |
+| 목표 만들기·담당 지정 | ✅ | ✅ | |
+| 목표 보기 | ✅ | ✅ | ✅ |
+| 피드백 쓰기 | ✅ | ✅ | |
+| 피드백 보기 | 전체(멤버별 거르기) | 전체(멤버별 거르기) | 나에게 온 것만 |
+
+- 초대 코드는 받을 사람(이메일 또는 user_id)이 정해진 코드입니다. 다른 사람이 입력하면 서버가 거절합니다.
+- 내보내기와 방장 넘기기는 한 번 더 확인한 뒤 실행합니다.
+- 멤버 현황의 학습 기록은 그룹 가입 이후가 아니라 전체 기간 누적이고, "그룹 데이터 공유"를 끈 멤버는 0으로 나옵니다(서버 계산 방식).
 
 ## 아직 더미인 부분
 
 | 위치 | 현재 | 바뀔 내용 |
 | --- | --- | --- |
 | `SessionPage.tsx`의 `sendDummyLog` | gaze·blink·head 점수를 `Math.random()`으로 만들고 `face_detected: true`를 고정 전송 | AI 측정값으로 교체. 점수를 누가 계산·전송할지(브라우저 또는 `ai/` Python 프로그램)는 팀 결정 대기 |
-| 같은 함수의 total 계산 | `gaze × 0.4 + blink × 0.3 + head × 0.3` (백엔드 `focusScore.js`와 동일) | 가중치 최종값이 정해지면 맞춤 |
+| 같은 함수의 total 계산 | `gaze × 0.3 + blink × 0.5 + head × 0.2` (백엔드 `focusScore.js`와 동일) | AI 연동 후에도 백엔드 계산식과 같게 유지 |
 | 세션 화면 웹캠 | 화면에 보여주기만 하고 분석에는 쓰지 않음 | AI 연동 방식이 정해지면 연결 |
 
 로그는 v1 API(`POST /api/sessions/:id/log`)로 1분마다 보냅니다. v2로 바꿀지도 AI 연동 방식에 따라 정합니다.
@@ -66,13 +106,30 @@ React와 TypeScript로 만든 FocusLens 웹 화면입니다. 백엔드 API(`back
 
 - **백엔드 API가 없어 대기:** 세션 일시정지, 비밀번호 찾기, 알림 설정
 - **AI 쪽 작업 대기:** 실제 집중도 점수, 눈 감지 팝업, 카메라 보정
-- **기획서 "고도화" 항목:** 리포트 PDF 내보내기
-- **범위 합의 대기:** 친구, 소셜 피드, 랭킹, 그룹 화면. API는 백엔드에 구현돼 있습니다(`docs/frontend-api-map.md` 1절).
+- **백엔드 API가 없어 뺀 기능:** 친구 삭제, 공유 취소, 그룹 나가기(일반 멤버), 받은 그룹 초대 목록, 공개 그룹 둘러보기, 목표 달성률·수정·완료·삭제, 목표 담당자 명단, 일반 멤버용 그룹 멤버 명단. 백엔드에 요청한 형태와 지금의 우회 방법은 아래 "백엔드에 요청한 API"에 있습니다.
+
+## 백엔드에 요청한 API
+
+아래 API가 없어도 화면은 우회 방법으로 동작합니다. 생기면 우회 화면을 줄이고 빠진 버튼을 넣을 수 있습니다. 경로는 제안이며 백엔드 규칙에 맞게 정합니다.
+
+| 우선 | 요청 | 제안 형태 | 지금 프런트 동작 |
+| --- | --- | --- | --- |
+| 높음 | 받은 그룹 초대 목록 | `GET /api/groups/invitations` (나에게 온 PENDING 초대) | 초대 코드를 메신저로 전달하고 [초대 코드로 가입]에 입력 |
+| 보통 | 친구 삭제 | `DELETE /api/connections/:connectionId` | 친구 목록에 [삭제] 없음 |
+| 보통 | 공유 취소 | `DELETE /api/session-shares/:id` (올린 사람만) | 피드 내 글에 [삭제] 없음 |
+| 보통 | 그룹 나가기 | 본인 내보내기 허용 또는 `POST /api/groups/:id/leave` | 일반 멤버용 [나가기] 없음 |
+| 보통 | 목표 달성률 | goals 응답에 기간 내 학습 분·평균 점수 추가 | 목표 수치만 표시, 진행 막대 없음 |
+| 보통 | 목표 수정·완료·삭제 | `PATCH`·`DELETE /api/groups/:id/goals/:goalId` | 목표가 계속 "진행 중" |
+| 낮음 | 목표 담당자 명단 | goals 응답에 assignees(멤버 ID·닉네임) 추가 | 담당 인원 수만 표시, 이미 담당인 사람을 고르면 409로 안내 |
+| 낮음 | 그룹 멤버 명단 | `GET /api/groups/:id/members` (멤버 누구나, 닉네임·역할만) | 일반 멤버는 "내 현황"만 |
+| 낮음 | 공개 그룹 둘러보기·바로 가입 | `GET /api/groups/public`, 코드 없는 가입 | 공개 그룹도 초대 코드로만 가입 |
+| 낮음 | 테스트용 시드 보강 | `seed.js`에 user_a 완료 세션 21개 이상 | [더 보기]·랭킹·피드를 직접 세션을 여러 번 만들어 확인 |
 
 ## 검증하지 못한 부분
 
 - **실제 카메라:** 지금까지 카메라가 없는 데스크탑에서만 확인했습니다.
 - **Roll-up 안내:** 로컬은 `ROLLUP_ENABLED=false`이고 시드 데이터에 30일 지난 세션이 없어서, 합쳐진 데이터로 안내가 뜨는 장면은 확인하지 못했습니다. 코드는 `docs/frontend-api-map.md` 2절의 `granularity` 규칙을 따릅니다.
+- **소셜·그룹 화면:** 화면별 동작은 mock API로 확인했고, 실제 백엔드에서는 일부만 확인했습니다. 계정 여러 개가 필요한 흐름(친구 요청·수락, 초대 코드 가입, 권한별 버튼)은 이어서 테스트합니다.
 - **팀 E2E 시나리오**(`docs/product-e2e-scenarios.md`)와 반응형·접근성 점검(`docs/integration-readiness.md` 5절)은 아직 진행하지 않았습니다.
 
 ## 기술 스택
@@ -115,9 +172,39 @@ npm run dev                        # http://localhost:5173
 | `user_b@focuslens.dev` | `password_b123!` | 일반 유저, A와 친구 관계 |
 | `admin@focuslens.dev` | `password_admin123!` | 관리자, 스터디 그룹 OWNER |
 
+시드 계정은 모두 **세션 비공개·랭킹 미참여**로 만들어집니다(새로 가입한 계정도 같음). 그대로면 공유·피드·랭킹이 비어 보이므로, 소셜 화면을 확인할 때는 각 계정 프로필에서 아래처럼 바꿉니다. 일부러 값을 다르게 두면 "비공개" 표시, 공유 범위 제한, 랭킹 제외, 그룹 현황 0 표시를 같이 확인할 수 있습니다.
+
+| 계정 | 기본 세션 공개 범위 | 점수 공개 | 학습 시간 공개 | 그룹 데이터 공유 | 랭킹 참여 |
+| --- | --- | --- | --- | --- | --- |
+| user_a | PUBLIC | PUBLIC | PUBLIC | 켜기 | 켜기 |
+| user_b | FRIENDS | FRIENDS | PRIVATE | 켜기 | 켜기 |
+| admin | PUBLIC | PRIVATE | PRIVATE | 끄기 | 끄기 |
+
+브라우저 하나에는 로그인이 하나뿐이라, 계정 여러 개는 일반 창·시크릿 창·다른 브라우저로 나눠 씁니다.
+
 ### 4. 알림·팝업 테스트 (개발용)
 
 더미 점수는 무작위라 이탈 상태가 연속으로 잘 나오지 않습니다. `http://localhost:5173/session?forceDistracted`로 접속하면 점수를 30점 이하로만 보내서, 2분 뒤 알림음과 안내 팝업을 확인할 수 있습니다. `npm run dev`에서만 동작하고 배포 빌드에서는 무시됩니다.
+
+### 5. 소셜·그룹 핵심 흐름 테스트
+
+계정 여러 개가 필요한 흐름입니다. 위 표대로 프로필을 바꾸고, 계정마다 세션을 2~3번(1~2분이면 충분) 완료한 뒤 진행합니다.
+
+1. **공유·피드:** user_a로 리포트 → [공유하기] 전체 공개 → 피드 맨 위에 보이는지. user_b로 [공유하기]를 열면 "친구에게"만 고를 수 있는지. user_a 피드에서 user_b 글의 학습 시간이 "비공개"인지
+2. **랭킹:** user_a로 친구 탭에 user_a·user_b만 나오는지. admin은 랭킹 참여가 꺼져 있어 어디에도 없고, admin 화면의 내 순위가 "기록 없음"인지
+3. **친구:** admin으로 친구 화면 → user_b의 ID로 요청 → user_b로 [수락] → 서로 친구 목록에 보이는지
+4. **그룹:** user_a로 그룹 만들기 → 초대(친구 중에서 user_b) → user_b로 코드 입력해 가입 → user_a가 user_b를 매니저로 바꾸면 user_b 화면에 전체 멤버 현황이 보이는지. 같은 코드를 admin이 넣으면 거절되는지
+5. **목표·피드백:** user_a로 목표 만들기·담당 지정, user_b에게 피드백 → user_b 화면에서 "나에게 배정됨"과 피드백이 보이는지
+
+### 6. 토큰 갱신 테스트
+
+Access Token 수명이 1시간이라, 개발자 도구(F12) → Application에서 토큰을 일부러 망가뜨려 확인합니다.
+
+| 상황 | 하는 방법 | 기대 결과 |
+| --- | --- | --- |
+| 정상 갱신 | Local Storage의 `access_token`을 `x`로 바꾸고 다른 메뉴로 이동 | 화면 정상, `access_token`이 새 값으로 바뀜 (Network: 401 → refresh 200 → 원래 요청 200) |
+| 갱신 실패 | Cookies에서 Refresh Token 쿠키 삭제 + `access_token`을 `x`로 | `/login?expired=true`로 이동 |
+| 네트워크 끊김 | Network 탭을 Offline으로 | "서버에 연결할 수 없습니다", 로그인 유지 |
 
 ## 명령어
 
@@ -149,8 +236,14 @@ frontend/
     ├── App.tsx            # 라우팅, 네비게이션 바, 로그아웃
     ├── ProtectedRoute.tsx # 토큰이 없으면 /login으로 이동
     ├── api.ts             # 모든 API 요청이 거치는 공통 함수
-    ├── index.css          # Tailwind와 디자인 토큰(@theme)
-    └── pages/             # 화면 6개
+    ├── friends.ts         # 친구 관계 불러오기, 친구 요청 보내기
+    ├── groups.ts          # 그룹 타입·역할 이름, 멤버 명단 불러오기
+    ├── index.css          # Tailwind와 디자인 토큰(@theme), 인쇄 설정
+    ├── pages/             # 주소가 있는 화면 11개
+    └── components/        # 화면 안에 끼워 쓰는 조각
+        ├── ShareDialog.tsx    # 세션 공유 창
+        ├── FriendButton.tsx   # [+ 친구] 버튼 (피드·랭킹)
+        └── group/             # 그룹 상세의 탭: 멤버(초대 포함)·목표·피드백
 ```
 
 ## 설계상 결정 사항
