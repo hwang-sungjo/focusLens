@@ -1,11 +1,11 @@
 // src/utils/focusScore.js
 // 집중도 점수 산정 알고리즘 — docs/backend-plan.md §참고: 집중도 점수 산정 알고리즘
-// S = (Gaze × 0.4) + (Blink × 0.3) + (Head × 0.3)
+// S = (Gaze × 0.3) + (Blink × 0.5) + (Head × 0.2)
 
 const WEIGHTS = {
-  gaze: 0.4,
-  blink: 0.3,
-  head: 0.3,
+  gaze: 0.3,
+  blink: 0.5,
+  head: 0.2,
 };
 
 const ATTENTION_THRESHOLDS = {

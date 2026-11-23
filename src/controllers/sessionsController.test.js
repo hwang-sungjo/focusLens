@@ -244,7 +244,7 @@ describe('concentration log idempotency', () => {
     gaze: 80,
     blink: 70,
     head: 90,
-    total: 80,
+    total: 77,
     face_detected: true,
   };
   const storedLog = {
@@ -254,7 +254,7 @@ describe('concentration log idempotency', () => {
     gaze_score: 80,
     blink_score: 70,
     head_score: 90,
-    focus_score: 80,
+    focus_score: 77,
     attention_state: 'FOCUSED',
     face_detected: true,
   };
@@ -279,6 +279,40 @@ describe('concentration log idempotency', () => {
     await sessionsController.logConcentration(req, res, next);
     return { res, next };
   };
+
+  it('stores and returns the total calculated with the current weights', async () => {
+    const { res, next } = await sendLog();
+
+    expect(next).not.toHaveBeenCalled();
+    expect(prisma.concentration_logs.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          gaze_score: 80,
+          blink_score: 70,
+          head_score: 90,
+          focus_score: 77,
+          attention_state: 'FOCUSED',
+        }),
+      }),
+    );
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ focus_score: 77, attention_state: 'FOCUSED' }),
+      }),
+    );
+  });
+
+  it('rejects a total calculated with the previous weights before accessing the database', async () => {
+    const { res, next } = await sendLog({ ...payload, total: 80 });
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.concentration_logs.create).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledWith(
+      expect.objectContaining({ statusCode: 400, message: 'total은 가중 합산값 77과 일치해야 합니다.' }),
+    );
+  });
 
   it('requires face_detected without accessing the database', async () => {
     const { face_detected: ignored, ...body } = payload;
@@ -319,6 +353,7 @@ describe('concentration log idempotency', () => {
       blink_score: 66.67,
       head_score: 100,
       focus_score: 63.34,
+      attention_state: 'NORMAL',
     };
     prisma.concentration_logs.create.mockResolvedValue(normalizedLog);
 
@@ -344,6 +379,7 @@ describe('concentration log idempotency', () => {
           blink_score: 66.67,
           head_score: 100,
           focus_score: 63.34,
+          attention_state: 'NORMAL',
         }),
       }),
     );
@@ -355,7 +391,7 @@ describe('concentration log idempotency', () => {
         minute_index: 1,
         logged_at: receivedAt,
         focus_score: 63.34,
-        attention_state: 'FOCUSED',
+        attention_state: 'NORMAL',
         face_detected: true,
       },
       error: '',
@@ -375,7 +411,7 @@ describe('concentration log idempotency', () => {
         log_id: 'log-id',
         minute_index: 1,
         logged_at: receivedAt,
-        focus_score: 80,
+        focus_score: 77,
         attention_state: 'FOCUSED',
         face_detected: true,
       },
@@ -439,7 +475,7 @@ describe('concentration log v2 measurement identity', () => {
     gaze: 80,
     blink: 70,
     head: 90,
-    total: 80,
+    total: 77,
     face_detected: true,
   };
   const storedLog = {
@@ -451,7 +487,7 @@ describe('concentration log v2 measurement identity', () => {
     gaze_score: 80,
     blink_score: 70,
     head_score: 90,
-    focus_score: 80,
+    focus_score: 77,
     attention_state: 'FOCUSED',
     face_detected: true,
   };
@@ -487,6 +523,11 @@ describe('concentration log v2 measurement identity', () => {
           logged_at: receivedAt,
           client_log_id: clientLogId,
           measured_at: measuredAt,
+          gaze_score: 80,
+          blink_score: 70,
+          head_score: 90,
+          focus_score: 77,
+          attention_state: 'FOCUSED',
         }),
       }),
     );
@@ -497,7 +538,7 @@ describe('concentration log v2 measurement identity', () => {
         log_id: 'v2-log-id',
         minute_index: 1,
         logged_at: receivedAt,
-        focus_score: 80,
+        focus_score: 77,
         attention_state: 'FOCUSED',
         face_detected: true,
         client_log_id: clientLogId,
@@ -505,6 +546,17 @@ describe('concentration log v2 measurement identity', () => {
       },
       error: '',
     });
+  });
+
+  it('rejects a total calculated with the previous weights before accessing the database', async () => {
+    const { res, next } = await sendLog({ ...payload, total: 80 });
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.concentration_logs.create).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledWith(
+      expect.objectContaining({ statusCode: 400, message: 'total은 가중 합산값 77과 일치해야 합니다.' }),
+    );
   });
 
   it('returns the existing row when the same client ID and payload are retried', async () => {

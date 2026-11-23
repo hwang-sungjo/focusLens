@@ -39,9 +39,9 @@ class AggregationConfig:
 
 @dataclass(frozen=True)
 class WeightConfig:
-    gaze: float = 0.4
-    blink: float = 0.3
-    head: float = 0.3
+    gaze: float = 0.3
+    blink: float = 0.5
+    head: float = 0.2
 
 
 @dataclass(frozen=True)
