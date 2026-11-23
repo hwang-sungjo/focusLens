@@ -171,7 +171,7 @@ function SessionPage() {
       const gaze = round2(Math.random() * max)
       const blink = round2(Math.random() * max)
       const head = round2(Math.random() * max)
-      const total = round2(gaze * 0.4 + blink * 0.3 + head * 0.3)
+      const total = round2(gaze * 0.3 + blink * 0.5 + head * 0.2)
 
       try {
         const res = await apiFetch(`/api/sessions/${sessionId}/log`, {

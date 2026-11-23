@@ -11,6 +11,8 @@
 - 새 로그 필드와 Refresh Token은 기존 v1을 유지한 별도 경로와 저장 구조로 추가했다.
 - 로그 v1 제거 시점은 AI v2 E2E 통과와 명시적 사용 중단 확인 이후로 제한한다.
 
+점수 계약은 v1·v2 모두 `gaze×0.3 + blink×0.5 + head×0.2`다. 기존 가중치로 계산한 `total`이 서버 계산값과 다르면 400으로 거부되므로 클라이언트도 이 점수식을 사용해야 한다. AI 측 테스트와 실제 전송값 검증은 별도 외부 작업이다.
+
 ## 2. 집중도 로그 v2
 
 ### 결정
@@ -25,12 +27,12 @@ Content-Type: application/json
 
 ```json
 {
-  "client_log_id": "uuid-v4",
+  "client_log_id": "123e4567-e89b-42d3-a456-426614174000",
   "measured_at": "2026-10-06T06:01:00.000Z",
   "gaze": 85.5,
   "blink": 72.0,
   "head": 90.0,
-  "total": 82.8,
+  "total": 79.65,
   "face_detected": true
 }
 ```
@@ -41,6 +43,8 @@ Content-Type: application/json
 | `measured_at` | 해당 60초 측정 구간의 종료 시각. UTC RFC 3339 형식 |
 | 점수 4개 | 유한한 0~100 숫자. `total = gaze×0.3 + blink×0.5 + head×0.2` |
 | `face_detected` | 필수 boolean. `false`이면 점수 4개 모두 0 |
+
+서버는 세부 점수와 요청 `total`을 각각 소수 둘째 자리로 반올림한 뒤 정규화한 세부 점수로 합산값을 계산하고 다시 소수 둘째 자리로 반올림한다. 정규화한 요청 `total`과 계산값 차이가 0.01을 넘으면 400을 반환하며 저장 값은 서버 계산값이다. 위 예시의 합산값은 79.65다. `measured_at` 예시는 실제 세션 시작 시각과 서버 시각에 맞춰 변경해야 한다.
 
 ### 서버 처리 규칙
 
