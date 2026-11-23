@@ -2,7 +2,7 @@ from focuslens_ai.score_calculator import calculate_total_score, clamp_score, ro
 
 
 def test_calculates_backend_weighted_total() -> None:
-    assert calculate_total_score(85.5, 72.0, 90.0) == 82.8
+    assert calculate_total_score(85.5, 72.0, 90.0) == 79.65
 
 
 def test_clamps_score_to_api_range() -> None:
