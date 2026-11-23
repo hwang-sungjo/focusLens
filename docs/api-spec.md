@@ -72,7 +72,7 @@
 focus_score = (gaze × 0.3) + (blink × 0.5) + (head × 0.2)
 ```
 
-백엔드는 요청의 `total`이 위 계산값(소수 둘째 자리 반올림)과 0.01 이내로 일치하는지 확인하고 계산값을 저장한다. 현재 `ai/`에는 같은 가중치의 계산 함수와 API 클라이언트가 있지만, 1분 점수 집계와 실시간 전송 연결은 미구현이다.
+백엔드는 `gaze`, `blink`, `head`, 요청 `total`을 각각 소수 둘째 자리로 반올림한다. 정규화한 세부 점수에 위 가중치를 적용하고 결과를 소수 둘째 자리로 반올림한 뒤, 정규화한 요청 `total`과 차이가 0.01을 넘으면 400을 반환한다. 저장 값은 서버 계산값이다. 예를 들어 `(85.5, 72.0, 90.0)`의 합산값은 `79.65`다. 현재 `ai/`에는 같은 가중치의 계산 함수와 API 클라이언트가 있지만, 1분 점수 집계와 실시간 전송 연결은 미구현이다.
 
 ### 1.5 세션 통계와 날짜 버킷
 
@@ -337,7 +337,7 @@ HttpOnly cookie를 사용하면 body는 생략할 수 있다.
   "gaze": 85.5,
   "blink": 72.0,
   "head": 90.0,
-  "total": 82.8,
+  "total": 79.65,
   "face_detected": true
 }
 ```
@@ -350,7 +350,7 @@ HttpOnly cookie를 사용하면 body는 생략할 수 있다.
 | `total` | float | 0~100, focus_score (가중 합산값) |
 | `face_detected` | boolean | 필수. `false`이면 네 점수가 모두 0이어야 함 |
 
-서버는 세부 점수를 소수 둘째 자리로 정규화하고 `total = gaze × 0.4 + blink × 0.3 + head × 0.3`을 다시 계산한다. 요청 `total`이 계산값과 0.01을 초과해 다르면 400을 반환하고, DB에는 서버 계산값을 저장한다.
+서버는 세부 점수와 요청 `total`을 소수 둘째 자리로 정규화하고 `total = gaze × 0.3 + blink × 0.5 + head × 0.2`을 다시 계산한 뒤 소수 둘째 자리로 반올림한다. 정규화한 요청 `total`이 계산값과 0.01을 초과해 다르면 400을 반환하고, DB에는 서버 계산값을 저장한다.
 
 **Response `200`**
 
@@ -361,7 +361,7 @@ HttpOnly cookie를 사용하면 body는 생략할 수 있다.
     "log_id": "uuid",
     "minute_index": 1,
     "logged_at": "2026-06-27T09:01:00.000Z",
-    "focus_score": 82.8,
+    "focus_score": 79.65,
     "attention_state": "FOCUSED",
     "face_detected": true
   },
@@ -406,7 +406,7 @@ HttpOnly cookie를 사용하면 body는 생략할 수 있다.
   "gaze": 85.5,
   "blink": 72.0,
   "head": 90.0,
-  "total": 82.8,
+  "total": 79.65,
   "face_detected": true
 }
 ```
@@ -427,7 +427,7 @@ HttpOnly cookie를 사용하면 body는 생략할 수 있다.
     "measured_at": "2026-10-06T06:01:00.000Z",
     "minute_index": 1,
     "logged_at": "2026-10-06T06:02:30.000Z",
-    "focus_score": 82.8,
+    "focus_score": 79.65,
     "attention_state": "FOCUSED",
     "face_detected": true
   },
@@ -470,12 +470,13 @@ HttpOnly cookie를 사용하면 body는 생략할 수 있다.
     "ended_at": "2026-06-27T10:00:00.000Z",
     "status": "COMPLETED",
     "summary": {
-      "avg_focus_score": 78.5,
+      "avg_focus_score": 77.57,
       "duration_seconds": 3600,
       "gaze_avg": 80.2,
       "blink_avg": 75.1,
       "head_avg": 79.8,
       "focused_minutes": 45,
+      "normal_minutes": 10,
       "distracted_minutes": 5
     }
   },
@@ -528,7 +529,7 @@ HttpOnly cookie를 사용하면 body는 생략할 수 있다.
         "started_at": "2026-06-27T09:00:00.000Z",
         "ended_at": "2026-06-27T10:00:00.000Z",
         "status": "COMPLETED",
-        "avg_focus_score": 78.5,
+        "avg_focus_score": 77.57,
         "duration_seconds": 3600
       }
     ],
@@ -581,7 +582,7 @@ HttpOnly cookie를 사용하면 body는 생략할 수 있다.
     "started_at": "2026-06-27T09:00:00.000Z",
     "ended_at": "2026-06-27T10:00:00.000Z",
     "status": "COMPLETED",
-    "avg_focus_score": 78.5,
+    "avg_focus_score": 77.57,
     "duration_seconds": 3600,
     "timeline": [
       {
@@ -591,7 +592,7 @@ HttpOnly cookie를 사용하면 body는 생략할 수 있다.
         "gaze_score": 85.5,
         "blink_score": 72.0,
         "head_score": 90.0,
-        "focus_score": 82.8,
+        "focus_score": 79.65,
         "attention_state": "FOCUSED",
         "face_detected": true,
         "log_count": 1,
@@ -605,6 +606,8 @@ HttpOnly cookie를 사용하면 body는 생략할 수 있다.
   "error": ""
 }
 ```
+
+위 `timeline`은 첫 원본 로그 한 건만 보여주는 축약 예시다. 세션 평균과 리포트 요약은 전체 로그 기준이다.
 
 `granularity`는 `MINUTE`, `HOUR`, `DAY`, `WEEK` 중 하나다. 집계 행은 `minute_index`, `attention_state`, `face_detected`가 `null`이며, 점수는 해당 버킷 평균이다. `log_count`와 상태별 건수가 포함된 원본 분 로그 수를 나타낸다. 세션 리포트의 `timeline`도 같은 형식을 사용한다.
 
@@ -649,7 +652,7 @@ HttpOnly cookie를 사용하면 body는 생략할 수 있다.
     "report_id": "uuid",
     "session_id": "uuid",
     "summary_json": {
-      "avg_focus_score": 78.5,
+      "avg_focus_score": 77.57,
       "duration_seconds": 3600,
       "gaze_avg": 80.2,
       "blink_avg": 75.1,
@@ -666,7 +669,7 @@ HttpOnly cookie를 사용하면 body는 생략할 수 있다.
         "gaze_score": 85.5,
         "blink_score": 72.0,
         "head_score": 90.0,
-        "focus_score": 82.8,
+        "focus_score": 79.65,
         "attention_state": "FOCUSED",
         "face_detected": true,
         "log_count": 1,
@@ -681,6 +684,8 @@ HttpOnly cookie를 사용하면 body는 생략할 수 있다.
   "error": ""
 }
 ```
+
+위 `timeline`은 첫 원본 로그 한 건만 보여주는 축약 예시이며 `summary_json`은 전체 로그 기준이다.
 
 **에러 케이스**
 
@@ -1244,7 +1249,7 @@ HttpOnly cookie를 사용하면 body는 생략할 수 있다.
         "session_summary": {
           "started_at": "2026-06-27T09:00:00.000Z",
           "duration_seconds": 3600,
-          "avg_focus_score": 78.5
+          "avg_focus_score": 77.57
         },
         "reaction_counts": {
           "LIKE": 12,
