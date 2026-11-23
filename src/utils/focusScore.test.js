@@ -31,13 +31,13 @@ describe('calcFocusScore', () => {
   it('calculates weighted focus score: S = (gaze×0.3) + (blink×0.5) + (head×0.2)', () => {
     expect(calcFocusScore(100, 100, 100)).toBe(100);
     expect(calcFocusScore(0, 0, 0)).toBe(0);
-    expect(calcFocusScore(100, 0, 0)).toBe(40);
-    expect(calcFocusScore(0, 100, 0)).toBe(30);
-    expect(calcFocusScore(0, 0, 100)).toBe(30);
+    expect(calcFocusScore(100, 0, 0)).toBe(30);
+    expect(calcFocusScore(0, 100, 0)).toBe(50);
+    expect(calcFocusScore(0, 0, 100)).toBe(20);
   });
 
   it('rounds the result to two decimal places', () => {
-    expect(calcFocusScore(85.55, 72.22, 90.11)).toBe(82.92);
+    expect(calcFocusScore(85.55, 72.22, 90.11)).toBe(79.8);
   });
 });
 
