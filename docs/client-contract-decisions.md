@@ -112,6 +112,7 @@ Backoff는 `1, 2, 4, 8, 16, 30초`를 상한으로 full jitter를 적용한다. 
 | 얼굴 검출 | 유효 sample 중 얼굴 검출 비율 80% 이상이면 `face_detected=true` |
 | 얼굴 미검출 | 비율 80% 미만이면 `face_detected=false`, 점수 4개 모두 0 |
 | blink | `OPEN→CLOSED→OPEN`만 1회 event. 100~500ms는 정상 blink, 1,000ms 이상은 장시간 눈 감김 |
+| 눈 감김 시간 비율 | 양눈 감김값이 각각 0.8 이상인 시간을 전체 60초로 나눈다. 15% 이상이면 장시간 눈 감김 비율로 판정하고, 15%를 초과하는 완전한 1%p당 1점을 추가 감점한다. `blink = clamp(100 - 20×longClosureCount - floor(max(0, ratio×100 - 15)), 0, 100)` |
 | 점수 | `gaze/blink/head/total` 모두 유한한 0~100 값 |
 | total | 백엔드 가중식 결과와 소수 둘째 자리 기준 0.01 이내 |
 | 구간 | 완료된 60초마다 `MinuteScore` 최대 1개 생성 |
