@@ -2,6 +2,9 @@
 const assert = require('node:assert/strict');
 const { randomBytes, randomUUID } = require('node:crypto');
 const { once } = require('node:events');
+const { spawn } = require('node:child_process');
+const path = require('node:path');
+const { calcFocusScore, getAttentionState } = require('../src/utils/focusScore');
 
 function configureEnvironment() {
   for (const key of ['AI1_DATABASE_URL', 'AI1_REDIS_URL']) {
@@ -31,7 +34,107 @@ function checkFields(actual, expected, label) {
   }
 }
 
-async function verify(baseUrl, db) {
+async function captureMinute(mode) {
+  const env = { ...process.env };
+  for (const key of ['JWT_SECRET', 'DATABASE_URL', 'REDIS_URL', 'AI1_DATABASE_URL', 'AI1_REDIS_URL', 'AI1_PG_PASSWORD']) {
+    delete env[key];
+  }
+  const args = ['-B', path.join(__dirname, 'ai2_camera_minute.py')];
+  if (mode === '--blank-fixture') args.push('--blank-fixture');
+  if (mode === '--camera-focus') args.push('--focus');
+  if (mode === '--focus-fixture') args.push('--focus-fixture');
+  const child = spawn(process.env.AI2_PYTHON || 'python3.11', args, {
+    env, stdio: ['ignore', 'pipe', 'inherit'],
+  });
+  const stop = () => child.kill('SIGKILL');
+  const timer = setTimeout(stop, 150_000);
+  process.once('exit', stop);
+  let stdout = '';
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', chunk => {
+    stdout += chunk;
+    if (stdout.length > 8192) stop();
+  });
+  try {
+    const [code, signal] = await once(child, 'close');
+    if (code !== 0) throw new Error(`AI-2 collector stopped (${signal || code}); no log submitted`);
+    return JSON.parse(stdout);
+  } finally {
+    clearTimeout(timer);
+    process.removeListener('exit', stop);
+  }
+}
+
+async function verifyCamera(request, db, session, mode) {
+  const fixture = mode === '--blank-fixture' || mode === '--focus-fixture';
+  const focus = mode === '--camera-focus' || mode === '--focus-fixture';
+  let start = Date.parse(session.started_at);
+  if (fixture) {
+    start -= 65_000;
+    await db.sessions.update({ where: { id: session.session_id }, data: { started_at: new Date(start) } });
+  }
+  const minute = await captureMinute(mode);
+  const expectedSource = fixture ? (focus ? 'focus-fixture' : 'blank-fixture') : 'camera';
+  assert.equal(minute.source, expectedSource);
+  const { samples, face_samples: faces, window_ms: windowMs, measured_at: measuredAt, score } = minute;
+  const sessionId = session.session_id;
+  assert.ok(Number.isInteger(samples) && samples >= 480 && Number.isInteger(faces) && faces >= 0 && faces <= samples,
+    'valid face sample counts');
+  assert.equal(faces / samples >= 0.8, focus, 'face ratio matches verification case');
+  assert.equal(windowMs, 60_000);
+  assert.match(measuredAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  const elapsed = Date.parse(measuredAt) - start;
+  assert.ok(elapsed >= windowMs && Date.parse(measuredAt) <= Date.now(), 'measurement must end within the live session');
+  for (const field of ['gaze', 'blink', 'head', 'total']) {
+    assert.ok(Number.isFinite(score[field]) && score[field] >= 0 && score[field] <= 100, `valid ${field} score`);
+  }
+  assert.equal(score.face_detected, focus);
+  if (focus) assert.ok(score.total > 0, 'positive real-face score');
+  else assert.deepEqual(score, { gaze: 0, blink: 0, head: 0, total: 0, face_detected: false });
+  const serverScore = calcFocusScore(score.gaze, score.blink, score.head);
+  assert.ok(Math.abs(score.total - serverScore) <= 0.01, 'Python/backend total parity');
+
+  const clientId = randomUUID();
+  const log = await request('POST', `/api/v2/sessions/${sessionId}/log`, 200, {
+    ...score, client_log_id: clientId, measured_at: measuredAt,
+  });
+  const state = getAttentionState(serverScore);
+  const expected = {
+    minute_index: Math.floor(elapsed / windowMs), focus_score: serverScore,
+    face_detected: focus, attention_state: state,
+  };
+  checkFields(log, { ...expected, client_log_id: clientId, measured_at: measuredAt }, 'camera API');
+  const rows = await db.concentration_logs.findMany({ where: { session_id: sessionId } });
+  assert.equal(rows.length, 1, 'one persisted camera log');
+  const detail = { ...expected, gaze_score: score.gaze, blink_score: score.blink, head_score: score.head };
+  checkFields(rows[0], { ...detail, client_log_id: clientId, id: log.log_id }, 'camera DB row');
+  assert.equal(rows[0].measured_at.toISOString(), measuredAt);
+  assert.equal(rows[0].logged_at.toISOString(), log.logged_at, 'camera receipt time');
+  const ended = await request('POST', `/api/sessions/${sessionId}/end`, 200, {});
+  const report = await request('GET', `/api/reports/${sessionId}`, 200);
+  checkFields(ended.summary, {
+    avg_focus_score: serverScore, gaze_avg: score.gaze, blink_avg: score.blink, head_avg: score.head,
+    focused_minutes: Number(state === 'FOCUSED'), normal_minutes: Number(state === 'NORMAL'),
+    distracted_minutes: Number(state === 'DISTRACTED'), total_logs: 1,
+  }, 'camera end summary');
+  assert.ok(ended.summary.duration_seconds >= 60, 'session spans a complete measurement minute');
+  const storedSession = await db.sessions.findUniqueOrThrow({ where: { id: sessionId } });
+  assert.equal(storedSession.started_at.getTime(), start, 'session start remains unchanged while recording');
+  assert.equal(storedSession.status, 'COMPLETED');
+  const storedReport = await db.reports.findUniqueOrThrow({ where: { session_id: sessionId } });
+  assert.equal(report.report_id, ended.report_id);
+  assert.equal(storedReport.id, ended.report_id);
+  assert.deepEqual(storedReport.summary_json, ended.summary, 'persisted camera report');
+  assert.deepEqual(report.summary_json, ended.summary);
+  assert.equal(report.timeline.length, 1);
+  checkFields(report.timeline[0], { ...detail, granularity: 'MINUTE', log_count: 1 }, 'camera timeline');
+  console.log(JSON.stringify({ result: focus ? 'AI-2 focus passed' : 'AI-2 absence passed', source: minute.source,
+    samples, face_samples: faces, score, metrics: minute.metrics,
+    measured_at: measuredAt, session_id: sessionId, report_id: report.report_id,
+    api_score: log.focus_score, db_score: rows[0].focus_score, report_avg: report.summary_json.avg_focus_score }));
+}
+
+async function verify(baseUrl, db, mode) {
   let token;
   async function request(method, path, status, body) {
     const response = await fetch(baseUrl + path, {
@@ -62,6 +165,7 @@ async function verify(baseUrl, db) {
   token = login.access_token;
   const session = await request('POST', '/api/sessions/start', 201, {});
   assert.equal(session.status, 'IN_PROGRESS');
+  if (mode) return verifyCamera(request, db, session, mode);
   const sessionId = session.session_id;
 
   // Model two already elapsed minutes on this fixture session. Log writes, session
@@ -132,6 +236,8 @@ async function verify(baseUrl, db) {
 }
 
 async function main() {
+  const mode = process.argv[2];
+  assert.ok([undefined, '--camera', '--blank-fixture', '--camera-focus', '--focus-fixture'].includes(mode), 'Unexpected verification mode');
   configureEnvironment();
   const app = require('../app');
   const db = require('../src/models/prismaClient');
@@ -139,7 +245,7 @@ async function main() {
   const server = app.listen(0, '127.0.0.1');
   try {
     await once(server, 'listening');
-    await verify(`http://127.0.0.1:${server.address().port}`, db);
+    await verify(`http://127.0.0.1:${server.address().port}`, db, mode);
   } finally {
     if (server.listening) await new Promise((resolve) => server.close(resolve));
     redis.disconnect();
@@ -148,6 +254,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(`AI-1 failed: ${error.message}`);
+  console.error(`Log verification failed: ${error.message}`);
   process.exitCode = 1;
 });

@@ -36,4 +36,4 @@ cp prisma/schema.prisma "$schema_dir/schema.prisma"
 PRISMA_GENERATE_SKIP_AUTOINSTALL=true "$prisma" generate --schema "$schema_dir/schema.prisma"
 "$prisma" migrate deploy --schema prisma/schema.prisma
 "${compose[@]}" exec -T postgres psql -X -v ON_ERROR_STOP=1 -U postgres -d focuslens_ai1 < prisma/views.sql
-node backend/scripts/verify-ai1-log-v2.js
+node backend/scripts/verify-ai1-log-v2.js "$@"
