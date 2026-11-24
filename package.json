@@ -5,6 +5,7 @@
   "scripts": {
     "test": "jest",
     "verify:openapi": "cd backend && npm run verify:openapi",
+    "verify:ai1": "bash backend/scripts/run-ai1.sh",
     "db:migrate": "cd backend && npx prisma migrate dev --schema=../prisma/schema.prisma",
     "db:migrate:deploy": "cd backend && npx prisma migrate deploy --schema=../prisma/schema.prisma",
     "db:seed": "cd backend && node ../prisma/seed.js",

@@ -1,0 +1,26 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: focuslens_ai1
+      POSTGRES_PASSWORD: ${AI1_PG_PASSWORD:?Run npm run verify:ai1}
+    ports:
+      - "127.0.0.1::5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "focuslens_ai1"]
+      interval: 1s
+      timeout: 2s
+      retries: 45
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1::6379"
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 45
