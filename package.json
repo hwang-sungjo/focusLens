@@ -10,6 +10,7 @@
     "verify:ai2:absence:fixture": "bash backend/scripts/run-ai1.sh --blank-fixture",
     "verify:ai2:focus": "bash backend/scripts/run-ai1.sh --camera-focus",
     "verify:ai2:focus:fixture": "bash backend/scripts/run-ai1.sh --focus-fixture",
+    "verify:ai3": "bash backend/scripts/run-ai1.sh --delivery",
     "db:migrate": "cd backend && npx prisma migrate dev --schema=../prisma/schema.prisma",
     "db:migrate:deploy": "cd backend && npx prisma migrate deploy --schema=../prisma/schema.prisma",
     "db:seed": "cd backend && node ../prisma/seed.js",

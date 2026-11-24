@@ -126,3 +126,4 @@ Backoff는 `1, 2, 4, 8, 16, 30초`를 상한으로 full jitter를 적용한다. 
 - `ai/`를 변경하지 않고 로그 v2와 Refresh Token을 구현했다.
 - Prisma migration, API 명세, OpenAPI, 단위 테스트와 실제 PostgreSQL·Redis HTTP 흐름을 검증했다.
 - 현행 v1 로그는 호환 유지하며 장시간 세션 클라이언트는 Refresh Token 연동을 사용할 수 있다.
+- AI-3 연결 어댑터(`backend/scripts/ai3_delivery.py`)는 로그의 영속 큐·재전송·Refresh 회전·종료 전 처리를 구현했다. `npm run verify:ai3`으로 실제 HTTP와 격리 DB에서 재현한다. Refresh 응답 유실 시에는 같은 이전 토큰을 다시 보내지 않고 재인증을 요구한다. 실행과 검증 기록은 `docs/backend-plan.md`의 AI-3 절을 따른다.
