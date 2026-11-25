@@ -5,13 +5,14 @@ const { createHash } = require('crypto');
 const { logEvent, recordMetric } = require('./observability');
 
 const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
+  // Keep reconnecting after an outage, but never queue authentication requests.
   lazyConnect: true,
+  enableOfflineQueue: false,
+  maxRetriesPerRequest: 1,
+  connectTimeout: 1000,
+  commandTimeout: 1500,
   retryStrategy: (times) => {
-    if (times > 3) {
-      recordMetric('redis_connection_errors_total', { phase: 'retry_exhausted' });
-      logEvent('redis_retry_exhausted', {}, 'error');
-      return null;
-    }
+    recordMetric('redis_connection_errors_total', { phase: 'retry' });
     return Math.min(times * 200, 2000);
   },
 });
@@ -21,7 +22,7 @@ redis.on('error', (err) => {
   recordMetric('redis_connection_errors_total', { phase: 'runtime' });
   logEvent('redis_connection_error', {
     error_code: err.code ?? null,
-    message: process.env.NODE_ENV === 'production' ? 'redis_connection_failed' : err.message,
+    message: 'redis_connection_failed',
   }, 'error');
 });
 

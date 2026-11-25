@@ -67,7 +67,7 @@ v1은 기존 AI 클라이언트 호환용이다.
 | Phase 2 | 실행 환경 구축 | Express, Prisma, PostgreSQL, Redis, Docker, Health check | ✅ 완료 |
 | Phase 3 | MVP API 구현 | 인증, 세션, 리포트, 소셜, 랭킹, 그룹 API 구현 | ✅ 완료 |
 | Phase 4 | 백엔드 검증·고도화 | 로그 수신 안정화, 보안 테스트, Roll-up, 성능 검증 | ✅ 완료 |
-| 로컬 실행 완성 | 로컬 프로그램 실행·복구·인계 | 아래 LBE-1~5 완료 조건 확인 | LBE-1~2 완료, LBE-3~5 대기 |
+| 로컬 실행 완성 | 로컬 프로그램 실행·복구·인계 | 아래 LBE-1~5 완료 조건 확인 | LBE-1~3 완료, LBE-4~5 대기 |
 | Phase 5 | 백엔드 배포·운영 | AWS, CI/CD, HTTPS, 모니터링, 복구 절차 검증 | 보류 — AWS 배포 재개 시 진행 |
 
 ### 현재 기준선
@@ -337,7 +337,7 @@ Phase 4는 아래 순서대로 진행한다. 각 단계의 테스트가 통과�
 
 - [✅] LBE-1 로컬 기동 완료
 - [✅] LBE-2 데이터 보존 완료
-- [ ] LBE-3 장애 복구 완료
+- [✅] LBE-3 장애 복구 완료
 - [ ] LBE-4 지속 AI 연결 완료
 - [ ] LBE-5 프런트 인계 완료
 
@@ -372,7 +372,24 @@ AI-1~3은 각 연결 모듈과 계약의 검증을 완료했다. AI-2에는 실�
 
 원본 백업은 `backups/focuslens-2026-11-25T03-54-39-780Z-1dd1e142-1990-4c93-bc83-acc593f82c97.dump`에 보관했다(93,238 bytes, SHA-256 `9e9bc8edf42ab045bb868b512d87de65884ecc930f3982ed04e5481371c1ff72`). `backups/`는 Git과 이미지 빌드 컨텍스트에서 제외한다. 검증용 신규 계정·세션은 원본 DB에 추가하지 않았다.
 
-재실행 명령은 `npm run local:backup`, `npm run local:restore -- --input 백업파일.dump`, `npm run verify:preserve -- --backup 백업파일.dump`이다. 복원은 새 DB만 생성하며 기존 DB·API 연결을 바꾸지 않는다. 선택적 테스트 시드는 `local:up` 성공 후 `npm run local:seed`로 실행한다. 자세한 절차는 [로컬 실행 가이드](setting-guide.md)를 참조한다. 다음 단위는 LBE-3 장애 복구다.
+재실행 명령은 `npm run local:backup`, `npm run local:restore -- --input 백업파일.dump`, `npm run verify:preserve -- --backup 백업파일.dump`이다. 복원은 새 DB만 생성하며 기존 DB·API 연결을 바꾸지 않는다. 선택적 테스트 시드는 `local:up` 성공 후 `npm run local:seed`로 실행한다. 자세한 절차는 [로컬 실행 가이드](setting-guide.md)를 참조한다.
+
+### LBE-3 완료 기록 (2026-11-25)
+
+Redis의 3회 재시도 후 영구 단절되는 설정을 최대 2초 간격의 지속 재연결로 변경했다. 오프라인 큐를 끄고 명령 제한을 1.5초로 두어 장애 중 인증 요청을 나중에 재실행하지 않는다. 연결은 서버 실행 시 시작하므로 OpenAPI 검사처럼 앱을 읽기만 하는 도구는 Redis에 접속하지 않는다. DB 연결 단절·시간 초과는 503으로 표준화하고 명세에 반영했다.
+
+- [✅] `npm run verify:recovery`로 별도 PostgreSQL 16·Redis 7·최신 API를 기동했다. 검증 전용 세션만 70초 소급해 v2 로그 79.65점과 종료 리포트를 만들었다.
+- [✅] Redis를 6초 이상 중지한 동안 Health·보호 조회·로그아웃 503을 확인했다. 같은 볼륨으로 Redis를 재기동하자 API 컨테이너·프로세스를 재시작하지 않고 복구했고, 이전 로그아웃 토큰은 계속 401이었다.
+- [✅] PostgreSQL 중지 동안 Health·DB 기반 조회 503을 확인했다. DB 재기동 후 같은 API 프로세스에서 기존 점수·리포트 응답이 일치했다. 이 재현의 장애 요청 최대 응답 시간은 Redis 5ms·DB 8ms였고 검증 요청 제한은 8초였다.
+- [✅] API를 먼저 중지한 유지보수 상태에서 검증용 Redis를 초기화하고 `local:recover-auth`를 실행했다. 과거 정상·로그아웃 Access Token과 과거 Refresh Token이 401이 되었고, 기존 활성 Refresh Token이 모두 폐기됐다. 새 로그인 후 기존 79.65점 리포트는 그대로 조회됐다.
+- [✅] SIGINT·SIGTERM 시 HTTP 신규 접수와 Roll-up 예약을 중단하고, 진행 중 작업 완료 후 Prisma·Redis를 정리하도록 구현했다. 정상 상태와 DB·Redis 단절 상태에서 컨테이너 종료 코드 0, 네 자원의 종료 로그를 확인했다. stop·상태 확인은 각각 307ms·315ms였다.
+- [✅] 기본 8초 종료 제한, 진행 중 요청·Roll-up 대기, 중복 신호, Redis quit 실패 대체 정리, 정리 실패·시간 초과 강제 종료를 단위 테스트로 검증했다.
+- [✅] Jest 16 suite·116 test, 인증 복구 명령의 실패·취소·경합·설정 보존 테스트 17개, 기존 환경 파일 테스트 6개, OpenAPI 38개 operation 및 구문·공백 검사를 통과했다. 검증 전용 컨테이너·볼륨·이미지·임시 파일을 정리했다.
+- [✅] 일반 로컬 서버도 최신 이미지로 갱신하고 `localhost:3000`의 Health·기존 계정·세션·리포트 조회 200을 확인했다. 전체 21개 테이블의 행 수·해시와 기존 환경 파일이 갱신 전후 같았다(계정 17개·세션 12개·리포트 12개·로그 6개). 원본 서버에는 장애나 인증 초기화를 적용하지 않았다.
+
+일반 서버 갱신 전 백업은 `backups/focuslens-2026-11-25T10-22-55-467Z-7f1c3b1d-4ec2-4c2c-89d6-1b9d3c15e020.dump`에 보관했다(93,992 bytes, SHA-256 `b59908cd7d633dcbf00a4d3c8fa1058e56a2603fc9b5118c7e88388409c49cfb`).
+
+Redis 데이터 유실 복구는 **API 중지 → JWT 비밀값 교체 → 모든 Refresh Token 폐기 → API 재생성** 절차다. 실패 시 API 중지 상태를 유지한다. 실행 중 예고 없는 `FLUSHDB`의 자동 감지·차단을 제공하는 것은 아니므로 Redis 초기화·교체·유실 복구 전에 API부터 중지한다. 명령·잠금·실패 시 조치는 [장애 복구 운영 절차](performance-operations.md#7-로컬-장애-복구와-종료)를 따른다. 다음 단위는 LBE-4 지속 AI 연결이다.
 
 로컬 작업 완료 후 프런트엔드 통합으로 진행한다. AWS·RDS·ElastiCache·클라우드 Secret·외부 HTTPS·자동 배포·CloudWatch 구성은 배포 재개 시 Phase 5에서 진행한다.
 
@@ -450,6 +467,6 @@ Phase 5 항목은 AI·프런트 외부 연동 잔여 목록과 분리해 이 절
 10. AI-1 로그 v2 수신 검증 — 완료
 11. AI-2 보정·blink·1분 집계와 실제 카메라→v2→리포트 검증 — 완료
 12. AI-3 오프라인 큐·토큰 갱신·종료 전 대기 로그 처리 — 완료
-13. 로컬 백엔드 LBE-1~2 — 완료, LBE-3~5 — 다음 진행 대상
+13. 로컬 백엔드 LBE-1~3 — 완료, LBE-4~5 — 다음 진행 대상
 14. 프런트엔드 통합 및 로컬 제품 E2E — 로컬 백엔드 준비 후 진행
 15. Phase 5 백엔드 배포·운영 — AWS 배포 재개 시 진행

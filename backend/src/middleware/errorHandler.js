@@ -20,10 +20,20 @@ const notFound = (req, res) => {
  */
 const { logEvent, recordMetric } = require('../services/observability');
 
+const DATABASE_UNAVAILABLE_CODES = new Set(['P1001', 'P1002', 'P1008', 'P1017', 'P2024']);
+const isDatabaseUnavailable = (err) => {
+  if (DATABASE_UNAVAILABLE_CODES.has(err.code || err.errorCode)) return true;
+  // Prisma raw queries preserve the PostgreSQL SQLSTATE in meta.code.
+  const sqlState = err.meta?.code;
+  return err.code === 'P2010' && typeof sqlState === 'string'
+    && (/^08/.test(sqlState) || ['57P01', '57P02', '57P03'].includes(sqlState));
+};
+
 // eslint-disable-next-line no-unused-vars
 const errorHandler = (err, req, res, next) => {
-  const isDatabaseError = typeof err.code === 'string' && /^P\d{4}$/.test(err.code);
-  if (isDatabaseError) recordMetric('database_errors_total', { code: err.code });
+  const databaseCode = err.code || err.errorCode;
+  const isDatabaseError = typeof databaseCode === 'string' && /^P\d{4}$/.test(databaseCode);
+  if (isDatabaseError) recordMetric('database_errors_total', { code: databaseCode });
   logEvent('application_error', {
     request_id: req.requestId ?? null,
     user_id: req.user?.sub ?? null,
@@ -35,6 +45,14 @@ const errorHandler = (err, req, res, next) => {
       ? err.message
       : 'internal_error',
   }, 'error');
+
+  if (isDatabaseUnavailable(err)) {
+    return res.status(503).json({
+      success: false,
+      data: {},
+      error: '데이터베이스에 일시적으로 연결할 수 없습니다.',
+    });
+  }
 
   // Prisma 에러 처리
   if (err.code === 'P2002') {

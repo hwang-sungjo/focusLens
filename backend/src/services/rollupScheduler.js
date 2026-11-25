@@ -21,25 +21,29 @@ const startRollupScheduler = ({ run = runRollup, now = () => new Date() } = {}) 
 
   let timer;
   let stopped = false;
+  let activeRun = Promise.resolve();
   const scheduleNext = () => {
     if (stopped) return;
     const current = now();
     const delay = Math.min(getNextRunAt(current, hourUtc).getTime() - current.getTime(), DAY_MS);
-    timer = setTimeout(async () => {
-      try {
-        const result = await run();
-        recordMetric('rollup_runs_total', { result: 'success' });
-        logEvent('rollup_completed', { result });
-      } catch (error) {
-        recordMetric('rollup_runs_total', { result: 'failure' });
-        logEvent('rollup_failed', {
-          error_name: error.name,
-          error_code: error.code ?? null,
-          message: process.env.NODE_ENV === 'production' ? 'rollup_failed' : error.message,
-        }, 'error');
-      } finally {
-        scheduleNext();
-      }
+    timer = setTimeout(() => {
+      if (stopped) return;
+      activeRun = (async () => {
+        try {
+          const result = await run();
+          recordMetric('rollup_runs_total', { result: 'success' });
+          logEvent('rollup_completed', { result });
+        } catch (error) {
+          recordMetric('rollup_runs_total', { result: 'failure' });
+          logEvent('rollup_failed', {
+            error_name: error.name,
+            error_code: error.code ?? null,
+            message: process.env.NODE_ENV === 'production' ? 'rollup_failed' : error.message,
+          }, 'error');
+        } finally {
+          scheduleNext();
+        }
+      })();
     }, delay);
     timer.unref?.();
   };
@@ -48,6 +52,7 @@ const startRollupScheduler = ({ run = runRollup, now = () => new Date() } = {}) 
   return () => {
     stopped = true;
     clearTimeout(timer);
+    return activeRun;
   };
 };
 

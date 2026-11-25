@@ -11,6 +11,8 @@ AGENTS.md
 .env.production
 .env.test
 .env.*.local
+*.auth-recovery.tmp
+.auth-recovery.lock
 
 # ── dependencies ──────────────────────────────────────────────────
 node_modules/

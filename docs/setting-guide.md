@@ -85,6 +85,22 @@ npm run verify:preserve -- --backup backups/백업파일.dump
 
 통합 검증은 백업을 별도 Compose 프로젝트에 복원하고, migration 전후 기존 컬럼의 행 수·SHA-256, 시드 2회 실행, 볼륨 재시작, 재백업·새 DB 복원과 계정·세션·리포트 API 응답을 대조합니다. 원본 서비스와 백업은 보존하고 검증 전용 컨테이너·볼륨·임시 파일만 정리합니다. Docker가 실행 중이어야 하며 최초 이미지 빌드에는 인터넷 연결이 필요합니다. 별도 프로젝트를 사용 중이면 백업·시드·복원 명령에도 같은 `COMPOSE_PROJECT_NAME`과 환경 파일 설정을 전달합니다.
 
+### 로컬 장애 복구
+
+DB·Redis가 잠시 중지됐으면 `docker compose start postgres redis`로 같은 볼륨을 재기동하고 `/health`가 200으로 돌아오는지 확인합니다. API는 Redis에 계속 재연결하므로 별도의 API 재시작이 필요하지 않습니다. 장애 동안 Health와 해당 의존성이 필요한 API는 503을 반환합니다. 서버는 SIGINT·SIGTERM 시 진행 중 요청·Roll-up을 기다리고 DB·Redis 연결을 정리합니다. 기본 종료 제한은 8초이며 Docker 종료 유예 시간을 더 길게 둡니다.
+
+Redis 블랙리스트 데이터가 사라졌거나 유실이 의심되면 **API를 먼저 중지**하고 복구합니다.
+
+```bash
+docker compose stop --timeout 15 backend
+npm run local:recover-auth
+curl --fail http://localhost:3000/health
+```
+
+복구 명령은 JWT 비밀값 교체와 모든 Refresh Token 폐기를 함께 수행하고 API를 다시 만듭니다. 모든 사용자는 다시 로그인해야 하며 계정·세션·리포트는 유지합니다. 실패 시 API 중지 상태를 유지하고 같은 명령으로 재시도합니다. 실행 중 Redis 초기화를 자동 감지하는 기능은 없으므로 Redis를 비우거나 교체하기 전에 API를 중지합니다. 기존 프로젝트 이름과 `LOCAL_ENV_FILE` 설정을 그대로 사용합니다.
+
+`npm run verify:recovery`는 별도 임시 환경에서 실제 장애·복구와 토큰 무효화를 재검증합니다. 종료 로그, 실패 시 처리, 잠금 파일 처리 등은 [장애 복구 운영 절차](performance-operations.md#7-로컬-장애-복구와-종료)를 참조합니다.
+
 ---
 
 ## 💻 프런트엔드 (Frontend) 팀 전달 사항

@@ -44,4 +44,37 @@ describe('global error response safety', () => {
       process.env.NODE_ENV = previous;
     },
   );
+
+  it.each(['P1001', 'P1002', 'P1008', 'P1017', 'P2024'])(
+    'returns 503 for a temporary database failure %s without exposing connection details',
+    (code) => {
+      const res = createResponse();
+      const err = Object.assign(new Error('postgresql://private:password@db'), { code });
+      errorHandler(err, {}, res, jest.fn());
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false, data: {}, error: '데이터베이스에 일시적으로 연결할 수 없습니다.',
+      });
+    },
+  );
+
+  it('handles the errorCode field of a Prisma initialization failure', () => {
+    const res = createResponse();
+    errorHandler({ name: 'PrismaClientInitializationError', errorCode: 'P1001' }, {}, res, jest.fn());
+    expect(res.status).toHaveBeenCalledWith(503);
+  });
+
+  it.each(['08006', '57P01', '57P02', '57P03'])(
+    'returns 503 for raw query connection failure SQLSTATE %s', (code) => {
+      const res = createResponse();
+      errorHandler({ code: 'P2010', meta: { code } }, {}, res, jest.fn());
+      expect(res.status).toHaveBeenCalledWith(503);
+    },
+  );
+
+  it('keeps a raw query syntax failure as 500', () => {
+    const res = createResponse();
+    errorHandler({ code: 'P2010', meta: { code: '42601' } }, {}, res, jest.fn());
+    expect(res.status).toHaveBeenCalledWith(500);
+  });
 });

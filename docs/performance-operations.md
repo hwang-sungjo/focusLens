@@ -84,3 +84,29 @@
 - 로그아웃 시 블랙리스트 등록 실패: **503**이며 성공 응답을 반환하지 않는다.
 - `/health` Redis ping 실패: **503**, `status=degraded`, `redis=disconnected`.
 - DB는 연결됐어도 Redis가 끊긴 동안 보호 API는 사용할 수 없다. 공개 문서와 Health check는 서버 프로세스가 응답 가능한 범위에서 유지된다.
+- Redis는 최대 2초 간격으로 계속 재연결한다. 인증 명령의 오프라인 큐를 끄고 명령 제한을 1.5초로 설정해 장애 중 요청을 나중에 실행하지 않는다. 같은 데이터를 유지한 Redis가 돌아오면 API 프로세스 재시작 없이 복구한다.
+
+## 7. 로컬 장애 복구와 종료
+
+PostgreSQL 연결 단절·연결 시간 초과·연결 풀 대기 시간 초과는 503과 `데이터베이스에 일시적으로 연결할 수 없습니다.`를 반환한다. 일반 SQL 오류는 500을 유지한다. DB·Redis 정상 여부는 `/health`의 `data.db`·`data.redis`로 구분한다. 같은 볼륨으로 의존성을 재기동한 뒤 `/health`가 200으로 돌아오고 기존 리포트가 조회되는지 확인한다.
+
+SIGINT·SIGTERM을 받으면 HTTP 신규 접수를 중단하고 Roll-up의 다음 예약을 취소한다. 진행 중 HTTP 요청과 Roll-up이 끝난 뒤 Prisma와 Redis 연결을 닫는다. Redis `quit`이 실패하면 `disconnect`로 정리한다. 정상 종료 코드는 0이며, 기본 8초(`SHUTDOWN_TIMEOUT_MS`) 안에 끝나지 않으면 남은 소켓·연결을 강제 종료하고 코드 1로 끝낸다. Docker 종료 유예 시간은 이 값보다 길게 설정한다.
+
+종료 로그는 `server_shutdown_started`, 자원별 `server_shutdown_resource_closed`(`http`, `rollup_scheduler`, `postgres`, `redis`), `server_shutdown_completed` 순으로 확인한다. 시간 초과는 `server_shutdown_timeout`, 정리 오류는 `server_shutdown_error`에 기록하며 비밀값과 원래 예외 메시지는 출력하지 않는다.
+
+### Redis 데이터 유실 시 인증 복구
+
+블랙리스트가 유실되면 서명이 유효한 과거 Access Token이 다시 허용될 수 있으므로 **Redis를 초기화·교체·유실된 상태로 복구하기 전에 API부터 중지**한다. 단순 재연결과 달리 다음 유지보수 절차는 모든 사용자의 재로그인을 요구한다.
+
+```bash
+docker compose stop --timeout 15 backend
+# API를 중지한 상태에서 Redis 데이터·볼륨을 점검하거나 복구한다.
+npm run local:recover-auth
+curl --fail http://localhost:3000/health
+```
+
+`local:recover-auth`는 API 중지를 확인한 뒤 기존 환경 파일의 JWT 비밀값만 원자적으로 교체하고, PostgreSQL의 모든 Refresh Token을 폐기한다. DB·Redis 준비 후 API를 재생성한다. 기존 Access Token은 서명 검증 401, 기존 Refresh Token도 401이 되고 새 로그인부터 사용할 수 있다. 계정·세션·리포트는 유지한다. 단계를 완료하지 못하면 API를 중지 상태로 유지하며 같은 명령으로 복구를 다시 시도한다. Docker 자체 오류로 중지 상태를 확인하지 못하면 명령의 오류 안내에 따라 API가 계속 중지되어 있는지 확인한다.
+
+이 절차는 Compose 로컬 환경과 기존 `backend/.env` 또는 `LOCAL_ENV_FILE`을 대상으로 한다. 별도 프로젝트를 사용하면 기존과 같은 `COMPOSE_PROJECT_NAME`을 전달한다. 동일 저장소의 동시 복구는 `.auth-recovery.lock`으로 차단한다. 작업 프로세스가 강제 종료되어 락이 남았다면, 기록된 PID의 복구 작업이 끝났고 API도 중지됐는지 확인한 뒤 남은 락을 정리하고 재실행한다. 비밀값 교체 후 과거 환경 파일로 되돌리지 않는다.
+
+실행 중 예고 없이 발생한 `FLUSHDB`의 자동 감지·차단은 구현 범위에 포함하지 않는다. Redis 데이터 유실이 의심되면 API부터 중지하고 위 절차를 수행한다. `npm run verify:recovery`는 별도 Compose 프로젝트에서 실제 의존성 중단·복구, 유지보수 중 Redis 데이터 초기화와 토큰 무효화, 정상·의존성 단절 상태의 종료를 검증한다. 기존 서비스에는 장애를 주입하지 않는다.
