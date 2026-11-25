@@ -464,16 +464,12 @@ blinkScore = 100
 longClosure 1회당 -20
 ```
 
-눈 감김 비율이 지나치게 높으면 추가 감점:
+눈 감김 비율이 지나치게 높으면 추가 감점: 
 
 ```text
-양눈 eyeBlink 값이 각각 0.8 이상인 관측 구간을 감김 시간으로 집계
-eyeClosedRatio = 감김 시간 / 전체 측정 시간 (기본 60초)
-eyeClosedRatio >= 0.15이면 장시간 눈 감김 비율로 판정
-eyeClosedRatioPenalty = floor(max(0, eyeClosedRatio × 100 - 15))
+eyeClosedRatio > threshold
+→ penalty
 ```
-
-2026-11-24 확정 기준이다. 15%에서 추가 감점은 0점, 16%에서 1점, 23%에서 8점이다. 기존 1,000ms 이상 연속 감김 1회당 20점 감점에 더하고 최종 점수는 0~100으로 제한한다. 프레임 수 비율 대신 프레임 사이 실제 경과 시간을 합산한다.
 
 예:
 
@@ -508,7 +504,7 @@ blinkScore = 100 - 20 - 8
 "blink": 72.0
 ```
 
-AI-2 연결 집계는 `backend/scripts/ai2_scoring.py`에 구현했다. 기존 Python feature 출력의 양눈 원시 감김값을 사용하며, 정상 얼굴 구간은 3초간 최소 20개 표본의 시선·자세 평균값으로 보정한다.
+※ Blink Score 공식과 threshold는 초기 구현 후 테스트 데이터를 기반으로 조정한다.
 
 ---
 
