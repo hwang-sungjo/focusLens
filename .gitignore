@@ -35,6 +35,7 @@ Thumbs.db
 # ── tmp / test artifacts ──────────────────────────────────────────
 tmp/
 coverage/
+backups/
 
 # ── Docker ────────────────────────────────────────────────────────
 # docker-compose.yml 은 커밋 대상

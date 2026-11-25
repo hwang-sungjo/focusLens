@@ -8,12 +8,11 @@ services:
   # ── PostgreSQL ────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
-    container_name: focuslens_postgres
     restart: unless-stopped
     environment:
       <<: *db-credentials
     ports:
-      - "5432:5432"
+      - "127.0.0.1:${LOCAL_DB_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -25,10 +24,9 @@ services:
   # ── Redis ─────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
-    container_name: focuslens_redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:${LOCAL_REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -37,32 +35,47 @@ services:
       timeout: 5s
       retries: 5
 
+  # Apply only committed migrations and Views before starting the API.
+  migrate:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: migration
+    restart: "no"
+    environment:
+      DATABASE_URL: "postgresql://focuslens:focuslens_pw@postgres:5432/focuslens?schema=public"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   # ── Backend (Node.js + Express) ───────────────────────────────────
   backend:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: focuslens_backend
+      context: .
+      dockerfile: backend/Dockerfile
+      target: runtime
     restart: unless-stopped
     env_file:
-      - ./backend/.env
+      - ${LOCAL_ENV_FILE:-./backend/.env}
     environment:
-      NODE_ENV: production
+      NODE_ENV: development
+      PORT: "3000"
+      CORS_ORIGIN: ${LOCAL_CORS_ORIGIN:-http://localhost:5173}
+      REFRESH_COOKIE_DOMAIN: ""
+      REFRESH_COOKIE_SAME_SITE: lax
+      ROLLUP_ENABLED: ${LOCAL_ROLLUP_ENABLED:-false}
       # Docker 내부 서비스명으로 HOST 덮어쓰기
       DATABASE_URL: "postgresql://focuslens:focuslens_pw@postgres:5432/focuslens?schema=public"
       REDIS_URL: "redis://redis:6379"
     ports:
-      - "3000:3000"
+      - "127.0.0.1:${LOCAL_API_PORT:-3000}:3000"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      # Prisma 스키마를 컨테이너에서 참조할 수 있도록 마운트
-      - ./prisma:/app/prisma:ro
-      # Swagger UI가 저장소의 OpenAPI 명세를 단일 원본으로 사용
-      - ./docs:/docs:ro
+      migrate:
+        condition: service_completed_successfully
 
 # ── Named Volumes (데이터 영속성 보장) ────────────────────────────
 volumes:

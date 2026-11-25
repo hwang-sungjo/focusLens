@@ -1,0 +1,26 @@
+# This Dockerfile is built with the repository root as its context.
+**
+!backend/
+!backend/package.json
+!backend/package-lock.json
+!backend/app.js
+!backend/server.js
+!backend/src/
+!backend/src/**
+!backend/scripts/
+!backend/scripts/rollup.js
+!backend/scripts/init-db.sh
+!prisma/
+!prisma/schema.prisma
+!prisma/views.sql
+!prisma/seed.js
+!prisma/migrations/
+!prisma/migrations/**
+!docs/
+!docs/swagger.yaml
+
+# Keep environment files and installed host dependencies out of allowed folders.
+**/.env
+**/.env.*
+**/node_modules
+**/node_modules/**

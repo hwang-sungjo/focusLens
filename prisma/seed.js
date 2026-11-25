@@ -6,11 +6,12 @@
 'use strict';
 
 const path = require('path');
-// bcrypt와 PrismaClient는 backend/node_modules에 설치되어 있으므로 명시적 경로 지정
-const backendModules = path.resolve(__dirname, '../backend/node_modules');
-const { PrismaClient } = require(path.join(backendModules, '@prisma/client'));
-const bcrypt = require(path.join(backendModules, 'bcryptjs'));
-
+const { createRequire } = require('node:module');
+// 호스트와 컨테이너 모두 backend의 모듈 탐색 경로를 사용한다.
+const backendRequire = createRequire(path.resolve(__dirname, '../backend/server.js'));
+backendRequire('dotenv').config({ path: path.resolve(__dirname, '../backend/.env') });
+const { PrismaClient } = backendRequire('@prisma/client');
+const bcrypt = backendRequire('bcryptjs');
 
 const prisma = new PrismaClient();
 const SALT_ROUNDS = 10;
