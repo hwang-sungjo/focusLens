@@ -189,6 +189,21 @@ function ProfilePage() {
                 </select>
               </div>
 
+              <div>
+                <label className="block text-sm text-secondary mb-1">학습 시간 공개 범위</label>
+                <select
+                  value={privacy.study_time_visibility}
+                  onChange={(e) => updatePrivacyField('study_time_visibility', e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2"
+                >
+                  {scopeOptions.map((opt) => (
+                    <option key={opt} value={opt}>
+                      {opt}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <label className="flex items-center gap-2 text-sm text-secondary">
                 <input
                   type="checkbox"
