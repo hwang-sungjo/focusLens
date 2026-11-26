@@ -24,6 +24,7 @@
     "verify:preserve": "node backend/scripts/verify-local-preservation.js",
     "verify:recovery": "node backend/scripts/verify-local-recovery.js",
     "verify:local-ai": "node backend/scripts/verify-local-ai.js",
+    "verify:handoff": "node backend/scripts/verify-handoff-stack.js",
     "db:migrate": "cd backend && npx prisma migrate dev --schema=../prisma/schema.prisma",
     "db:migrate:deploy": "cd backend && npx prisma migrate deploy --schema=../prisma/schema.prisma",
     "db:seed": "cd backend && node ../prisma/seed.js",

@@ -2,7 +2,8 @@
 
 React와 TypeScript로 만든 FocusLens 웹 화면입니다. 백엔드 API(`backend/`)에 연결해 로그인, 학습 세션, 대시보드, 리포트, 프로필 화면을 제공합니다.
 
-> 작업 브랜치: `uiux`
+> 로컬 실행·인계 기준: [docs/frontend-handoff.md](../docs/frontend-handoff.md)
+> 이번 작업 트리의 기본 6화면 기준 문서입니다. 원격 `main@40bc369`에는 소셜·그룹 등 추가 화면과 개선이 이미 합쳐져 있으며, 현재 develop에는 아직 동기화되지 않았습니다. 다음 통합에서 기존 main 기능을 보존해 반영합니다.
 
 ## 화면과 사용하는 API
 
@@ -43,11 +44,13 @@ React와 TypeScript로 만든 FocusLens 웹 화면입니다. 백엔드 API(`back
 
 | 위치 | 현재 | 바뀔 내용 |
 | --- | --- | --- |
-| `SessionPage.tsx`의 `sendDummyLog` | gaze·blink·head 점수를 `Math.random()`으로 만들고 `face_detected: true`를 고정 전송 | AI 측정값으로 교체. 점수를 누가 계산·전송할지(브라우저 또는 `ai/` Python 프로그램)는 팀 결정 대기 |
-| 같은 함수의 total 계산 | `gaze × 0.4 + blink × 0.3 + head × 0.3` (백엔드 `focusScore.js`와 동일) | 가중치 최종값이 정해지면 맞춤 |
+| `SessionPage.tsx`의 `sendDummyLog` | gaze·blink·head 점수를 `Math.random()`으로 만들고 `face_detected: true`를 고정 전송 | 실제 AI 결과의 화면 수신·표시와 세션 제어 연결 |
+| 같은 함수의 total 계산 | `gaze × 0.3 + blink × 0.5 + head × 0.2` (백엔드 `focusScore.js`와 동일) | 현재 확정 가중치 유지 |
 | 세션 화면 웹캠 | 화면에 보여주기만 하고 분석에는 쓰지 않음 | AI 연동 방식이 정해지면 연결 |
 
-로그는 v1 API(`POST /api/sessions/:id/log`)로 1분마다 보냅니다. v2로 바꿀지도 AI 연동 방식에 따라 정합니다.
+현재 화면의 더미 로그는 v1 API(`POST /api/sessions/:id/log`)로 1분마다 보냅니다. 실제 AI 도구는 v2를 사용하며, 프런트 통합에서는 전송 주체를 하나로 정해 중복 발송을 막아야 합니다.
+
+실제 카메라 집계·큐·v2 전송은 백엔드의 별도 `local:ai` 도구에 연결돼 있습니다. 같은 계정에서 CLI가 측정 중일 때 이 화면으로 이어하기·종료하기를 실행하면 더미 로그 충돌이나 미전송 로그 누락이 생길 수 있습니다. CLI가 전송·종료를 마친 뒤 리포트에서 결과를 확인합니다. 화면과 실제 AI의 종합 연결은 후속 프런트 통합 작업입니다.
 
 ## 기획서와 다르게 한 부분
 
@@ -64,13 +67,13 @@ React와 TypeScript로 만든 FocusLens 웹 화면입니다. 백엔드 API(`back
 ## 미구현
 
 - **백엔드 API가 없어 대기:** 세션 일시정지, 비밀번호 찾기, 알림 설정
-- **AI 쪽 작업 대기:** 실제 집중도 점수, 눈 감지 팝업, 카메라 보정
+- **프런트·AI 연결 작업 대기:** 기존 `local:ai`의 실제 점수·상태를 화면에 연결하고 카메라·세션 제어 주체를 통합; 눈 감지 팝업도 이 연결 후 검증
 - **기획서 "고도화" 항목:** 리포트 PDF 내보내기
 - **범위 합의 대기:** 친구, 소셜 피드, 랭킹, 그룹 화면. API는 백엔드에 구현돼 있습니다(`docs/frontend-api-map.md` 1절).
 
 ## 검증하지 못한 부분
 
-- **실제 카메라:** 지금까지 카메라가 없는 데스크탑에서만 확인했습니다.
+- **프런트와 실제 카메라의 종합 연결:** 별도 `local:ai`의 실제 2분 측정·복구는 LBE-4에서 통과했지만 이 화면과 함께 동작하는 제품 E2E는 후속 작업입니다.
 - **Roll-up 안내:** 로컬은 `ROLLUP_ENABLED=false`이고 시드 데이터에 30일 지난 세션이 없어서, 합쳐진 데이터로 안내가 뜨는 장면은 확인하지 못했습니다. 코드는 `docs/frontend-api-map.md` 2절의 `granularity` 규칙을 따릅니다.
 - **팀 E2E 시나리오**(`docs/product-e2e-scenarios.md`)와 반응형·접근성 점검(`docs/integration-readiness.md` 5절)은 아직 진행하지 않았습니다.
 
@@ -85,13 +88,12 @@ React 19, TypeScript, Vite, Tailwind CSS v4(`@tailwindcss/vite`), React Router v
 `docs/setting-guide.md`를 따라 프로젝트 루트에서 백엔드를 실행합니다.
 
 ```bash
-docker compose up -d --build
-npm run db:migrate:deploy   # 저장소에 있는 migration만 적용
-npm run db:views
-npm run db:seed
+npm ci --prefix backend
+npm run local:up
+npm run local:seed          # 테스트 계정이 필요할 때만 실행
 ```
 
-> ⚠️ `npm run db:migrate`(Prisma `migrate dev`)를 실행하면 `schema.prisma`와 migration 파일의 인덱스 이름 차이 때문에 새 migration 파일이 자동 생성될 수 있습니다. 이름을 물어보면 Ctrl+C로 중단하세요. 이미 생성됐다면 커밋하지 말고 삭제한 뒤 `npm run db:reset`으로 저장소 기준 상태로 되돌립니다.
+Node.js 22.x(22.13 이상)와 Docker Desktop이 필요합니다. `local:up`이 DB·Redis 준비 후 저장소 migration·조회 View를 적용합니다. 기존 환경 파일·볼륨과 시드 계정의 변경된 비밀번호를 유지합니다. 종료는 `npm run local:down`, 데이터 변경 전 백업은 `npm run local:backup`을 사용합니다. 일상 기동에 `migrate dev`, `db:reset`, `down -v`를 사용하지 않습니다.
 
 `http://localhost:3000/health`가 200이면 준비된 것입니다.
 
@@ -99,12 +101,13 @@ npm run db:seed
 
 ```bash
 cd frontend
-cp .env.example .env.development   # 선택: 없으면 http://localhost:3000을 기본값으로 사용
-npm install
-npm run dev                        # http://localhost:5173
+# 선택: .env.development에 VITE_API_BASE_URL=http://localhost:3000 설정
+# 기존 파일은 보존하며, 없으면 같은 기본값을 사용합니다.
+npm ci
+npm run dev -- --host localhost --port 5173 --strictPort
 ```
 
-백엔드 CORS 설정은 `http://localhost:5173`을 허용합니다. 다른 포트를 쓰면 `backend/.env`의 `CORS_ORIGIN`도 바꿔야 합니다.
+프런트와 API는 모두 `localhost`를 사용합니다. `127.0.0.1`과 섞으면 SameSite 쿠키와 CORS가 달라질 수 있습니다. 다른 포트를 쓰면 API의 `LOCAL_API_PORT`, 프런트 `VITE_API_BASE_URL`, Compose `LOCAL_CORS_ORIGIN`을 함께 맞추고 재기동합니다. 호스트에서 API를 직접 실행하는 경우에는 `backend/.env`의 `CORS_ORIGIN`을 사용합니다. `strictPort`는 허용하지 않은 5174로 자동 이동하는 것을 막습니다.
 
 ### 3. 테스트 계정 (시드 데이터)
 
@@ -113,6 +116,8 @@ npm run dev                        # http://localhost:5173
 | `user_a@focuslens.dev` | `password_a123!` | 일반 유저 |
 | `user_b@focuslens.dev` | `password_b123!` | 일반 유저, A와 친구 관계 |
 | `admin@focuslens.dev` | `password_admin123!` | 관리자, 스터디 그룹 OWNER |
+
+표의 비밀번호는 최초 시드 값입니다. 기존 비밀번호·역할을 변경했다면 변경한 값을 사용합니다. 다중 계정은 별도 브라우저 프로필·시크릿 컨텍스트로 나눕니다. 같은 컨텍스트의 탭은 인증 저장소와 쿠키를 공유합니다.
 
 ### 4. 알림·팝업 테스트 (개발용)
 
