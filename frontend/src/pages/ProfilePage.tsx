@@ -133,8 +133,9 @@ function ProfilePage() {
 
           <div className="space-y-3">
             <div>
-              <label className="block text-sm text-secondary mb-1">닉네임</label>
+              <label htmlFor="nickname" className="block text-sm text-secondary mb-1">닉네임</label>
               <input
+                id="nickname"
                 type="text"
                 value={nickname}
                 onChange={(e) => setNickname(e.target.value)}
@@ -142,8 +143,9 @@ function ProfilePage() {
               />
             </div>
             <div>
-              <label className="block text-sm text-secondary mb-1">소개</label>
+              <label htmlFor="bio" className="block text-sm text-secondary mb-1">소개</label>
               <textarea
+                id="bio"
                 value={bio}
                 onChange={(e) => setBio(e.target.value)}
                 rows={3}
@@ -160,8 +162,9 @@ function ProfilePage() {
 
             <div className="space-y-4">
               <div>
-                <label className="block text-sm text-secondary mb-1">기본 세션 공개 범위</label>
+                <label htmlFor="default-session-scope" className="block text-sm text-secondary mb-1">기본 세션 공개 범위</label>
                 <select
+                  id="default-session-scope"
                   value={privacy.default_session_scope}
                   onChange={(e) => updatePrivacyField('default_session_scope', e.target.value)}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2"
@@ -175,8 +178,9 @@ function ProfilePage() {
               </div>
 
               <div>
-                <label className="block text-sm text-secondary mb-1">점수 공개 범위</label>
+                <label htmlFor="score-visibility" className="block text-sm text-secondary mb-1">점수 공개 범위</label>
                 <select
+                  id="score-visibility"
                   value={privacy.score_visibility}
                   onChange={(e) => updatePrivacyField('score_visibility', e.target.value)}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2"
@@ -190,8 +194,9 @@ function ProfilePage() {
               </div>
 
               <div>
-                <label className="block text-sm text-secondary mb-1">학습 시간 공개 범위</label>
+                <label htmlFor="study-time-visibility" className="block text-sm text-secondary mb-1">학습 시간 공개 범위</label>
                 <select
+                  id="study-time-visibility"
                   value={privacy.study_time_visibility}
                   onChange={(e) => updatePrivacyField('study_time_visibility', e.target.value)}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2"

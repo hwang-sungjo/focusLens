@@ -75,11 +75,12 @@ function LoginPage() {
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div>
-            <label className="block text-sm font-medium text-primary mb-1">
+            <label htmlFor="login-email" className="block text-sm font-medium text-primary mb-1">
               이메일
             </label>
             <input
               type="email"
+              id="login-email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="you@example.com"
@@ -89,11 +90,12 @@ function LoginPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-primary mb-1">
+            <label htmlFor="login-password" className="block text-sm font-medium text-primary mb-1">
               비밀번호
             </label>
             <input
               type="password"
+              id="login-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"

@@ -1,4 +1,4 @@
-// FE-2 and FE-3 exercise the actual production frontend against the isolated stack.
+// Exercise the production frontend against an isolated stack.
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
@@ -8,11 +8,14 @@ const { verifyAuth } = require('./tests/fe2-auth.cjs');
 const { verifyPrivacy } = require('./tests/fe2-privacy.cjs');
 const { verifyGroups } = require('./tests/fe2-groups.cjs');
 const { startCompanion, checkQueue, verifyMeasurement } = require('./tests/fe3-measurement.cjs');
+const { startRecoveryProxy, verifyRecovery, checkRecoveryQueue } = require('./tests/fe4-measurement.cjs');
+const { verifyHistory } = require('./tests/fe4-history.cjs');
+const { verifyQuality } = require('./tests/fe4-quality.cjs');
 
 function failureLocation(error) {
   // Action logs can contain input values. Report only test source locations.
   return (error.stack || '').split('\n').filter(line => /^\s*at /.test(line))
-    .map(line => line.match(/(?:fe[23]-[a-z]+|verify-frontend-browser)\.cjs:\d+:\d+/)?.[0])
+    .map(line => line.match(/(?:fe[234]-[a-z]+|verify-frontend-browser)\.cjs:\d+:\d+/)?.[0])
     .filter(Boolean).slice(0, 3);
 }
 
@@ -26,16 +29,19 @@ async function main() {
   const root = path.resolve(__dirname, '../../frontend');
   const temporary = path.dirname(process.env.LOCAL_ENV_FILE);
   const outDir = await fs.mkdtemp(path.join(temporary, 'web-'));
-  const bridgeMode = process.argv[2] === '--fe3';
+  const recoveryMode = process.argv[2] === '--fe4';
+  const bridgeMode = recoveryMode || process.argv[2] === '--fe3';
   const mode = process.argv[3] === '--live' ? 'live' : 'fixture';
   let companion;
+  let proxy;
   let server;
   let browser;
   let stage = 'build_frontend';
   try {
     if (bridgeMode) {
       stage = 'start_isolated_python_companion';
-      companion = await startCompanion(mode);
+      if (recoveryMode) proxy = await startRecoveryProxy(apiOrigin);
+      companion = await startCompanion(mode, proxy?.origin);
     }
     stage = 'build_frontend';
     const vite = await import(pathToFileURL(require.resolve('vite', { paths: [root] })).href);
@@ -53,24 +59,25 @@ async function main() {
     stage = 'browser_scenarios';
     const checks = {};
     const failures = {};
-    // Each scenario creates independent accounts, and the scored fixture needs one real minute.
-    const scenarios = bridgeMode ? { measurement: verifyMeasurement } : { auth: verifyAuth, privacy: verifyPrivacy, groups: verifyGroups };
-    await Promise.all(Object.entries(scenarios)
-      .map(async ([name, run]) => {
-        try { checks[name] = await run({ browser, origin, apiOrigin, bridgeOrigin: companion?.origin, mode, temporary }); }
-        catch (error) {
-          failures[name] = { type: error.name, location: failureLocation(error) };
-          if (mode === 'live') {
-            const knownReasons = ['camera_or_local_state_unavailable', 'camera_in_use', 'camera_open_failed',
-              'camera_read_failed', 'camera_inference_failed', 'model_unavailable', 'camera_dependencies_unavailable',
-              'browser_disconnected', 'camera_paused'];
-            if (error.capture?.phase === 'paused') failures[name].capture = {
-              phase: 'paused', reason: knownReasons.includes(error.capture.reason) ? error.capture.reason : 'unknown',
-            };
-            failures[name].progress = await cameraProgress(temporary);
-          }
+    const runScenario = async ([name, run]) => {
+      try {
+        checks[name] = await run({ browser, origin, apiOrigin, bridgeOrigin: companion?.origin, mode, temporary, proxy });
+      } catch (error) {
+        failures[name] = { type: error.name, location: failureLocation(error) };
+        if (mode === 'live' && ['measurement', 'recovery'].includes(name)) {
+          const knownReasons = ['camera_or_local_state_unavailable', 'camera_in_use', 'camera_open_failed',
+            'camera_read_failed', 'camera_inference_failed', 'model_unavailable', 'camera_dependencies_unavailable',
+            'browser_disconnected', 'camera_paused'];
+          if (error.capture?.phase === 'paused') failures[name].capture = {
+            phase: 'paused', reason: knownReasons.includes(error.capture.reason) ? error.capture.reason : 'unknown',
+          };
+          failures[name].progress = await cameraProgress(temporary);
         }
-      }));
+      }
+    };
+    if (recoveryMode) await runScenario(['recovery', verifyRecovery]);
+    else if (bridgeMode) await runScenario(['measurement', verifyMeasurement]);
+    else await Promise.all(Object.entries({ auth: verifyAuth, privacy: verifyPrivacy, groups: verifyGroups }).map(runScenario));
     if (companion) {
       stage = 'verify_durable_queue';
       const result = await companion.stop();
@@ -80,6 +87,14 @@ async function main() {
         await checkQueue(temporary, checks.measurement);
         checks.measurement.sqlite_sent_and_ended = true;
       }
+      if (checks.recovery) {
+        await checkRecoveryQueue(temporary, checks.recovery);
+        checks.recovery.sqlite_sent_and_ended = true;
+      }
+    }
+    if (recoveryMode) {
+      // Finish capture before rendering more pages. Camera sampling is time-sensitive.
+      await Promise.all(Object.entries({ history: verifyHistory, quality: verifyQuality }).map(runScenario));
     }
     const passed = Object.keys(failures).length === 0;
     if (!passed) process.exitCode = 1;
@@ -89,11 +104,12 @@ async function main() {
     console.error(JSON.stringify({ stage, type: error.name, location: failureLocation(error),
       ...(stage === 'launch_chromium' && { hint: 'Install the matching browser with npx playwright-core install chromium.' }) }));
   } finally {
-    await Promise.all([browser?.close(), server?.close(), companion?.stop()]);
+    try { await Promise.all([browser?.close(), server?.close(), companion?.stop()]); }
+    finally { await proxy?.stop(); }
   }
 }
 
 main().catch(() => {
-  console.error(JSON.stringify({ error: 'Browser worker setup or cleanup failed. Run npm run verify:fe2.' }));
+  console.error(JSON.stringify({ error: 'Browser worker setup or cleanup failed.' }));
   process.exitCode = 1;
 });

@@ -28,6 +28,7 @@
     "verify:handoff": "node backend/scripts/verify-handoff-stack.js",
     "verify:fe2": "node backend/scripts/verify-handoff-stack.js --browser",
     "verify:fe3": "node backend/scripts/verify-handoff-stack.js --fe3",
+    "verify:fe4": "node backend/scripts/verify-handoff-stack.js --fe4",
     "db:migrate": "cd backend && npx prisma migrate dev --schema=../prisma/schema.prisma",
     "db:migrate:deploy": "cd backend && npx prisma migrate deploy --schema=../prisma/schema.prisma",
     "db:seed": "cd backend && node ../prisma/seed.js",

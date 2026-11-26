@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { BrowserRouter, Routes, Route, Link, useLocation, Navigate } from 'react-router-dom'
 import LoginPage from './pages/LoginPage'
 import SessionPage from './pages/SessionPage'
@@ -29,6 +29,8 @@ function AppContent() {
   const location = useLocation()
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const accountButton = useRef<HTMLButtonElement>(null)
+  const navigationButton = useRef<HTMLButtonElement>(null)
   const isLoggedIn = !!localStorage.getItem('access_token')
   const hideNav = location.pathname === '/login' || location.pathname === '/register'
 
@@ -46,7 +48,16 @@ function AppContent() {
   return (
     <>
       {!hideNav && isLoggedIn && (
-        <nav className="bg-surface shadow-sm print:hidden">
+        <nav
+          aria-label="주 메뉴"
+          className="bg-surface shadow-sm print:hidden"
+          onKeyDown={(event) => {
+            if (event.key === 'Escape' && mobileMenuOpen) {
+              setMobileMenuOpen(false)
+              navigationButton.current?.focus()
+            }
+          }}
+        >
           <div className="flex items-center justify-between px-6 py-3">
             <Link to="/dashboard" className="text-base sm:text-lg font-bold text-primary shrink-0">
               FocusLens
@@ -64,14 +75,31 @@ function AppContent() {
 
               {/* 좁은 화면: 햄버거 버튼 */}
               <button
+                ref={navigationButton}
+                aria-label="페이지 메뉴"
+                aria-expanded={mobileMenuOpen}
+                aria-controls={mobileMenuOpen ? 'mobile-navigation' : undefined}
                 onClick={() => setMobileMenuOpen((prev) => !prev)}
                 className="md:hidden text-2xl text-primary"
               >
                 ☰
               </button>
 
-              <div className="relative">
+              <div
+                className="relative"
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape' && dropdownOpen) {
+                    event.stopPropagation()
+                    setDropdownOpen(false)
+                    accountButton.current?.focus()
+                  }
+                }}
+              >
                 <button
+                  ref={accountButton}
+                  aria-label="계정 메뉴"
+                  aria-expanded={dropdownOpen}
+                  aria-controls={dropdownOpen ? 'account-navigation' : undefined}
                   onClick={() => setDropdownOpen((prev) => !prev)}
                   className="w-8 h-8 rounded-full bg-accent text-white flex items-center justify-center text-sm font-medium"
                 >
@@ -79,7 +107,7 @@ function AppContent() {
                 </button>
 
                 {dropdownOpen && (
-                  <div className="absolute right-0 mt-2 w-40 bg-surface rounded-lg shadow-md py-2 z-10">
+                  <div id="account-navigation" className="absolute right-0 mt-2 w-40 bg-surface rounded-lg shadow-md py-2 z-10">
                     <Link
                       to="/profile"
                       onClick={() => setDropdownOpen(false)}
@@ -101,7 +129,7 @@ function AppContent() {
 
           {/* 좁은 화면: 펼쳐지는 메뉴 */}
           {mobileMenuOpen && (
-            <div className="md:hidden flex flex-col px-6 pb-3 gap-2">
+            <div id="mobile-navigation" className="md:hidden flex flex-col px-6 pb-3 gap-2">
               {NAV_LINKS.map((link) => (
                 <Link
                   key={link.to}

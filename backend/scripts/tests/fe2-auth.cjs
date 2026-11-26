@@ -54,7 +54,7 @@ async function forceAccessRejection(page) {
 }
 
 async function enterProfile(page) {
-  await page.getByRole('button', { name: '👤', exact: true }).click();
+  await page.getByRole('button', { name: '계정 메뉴', exact: true }).click();
   await page.getByRole('link', { name: '프로필 / 설정', exact: true }).click();
   await page.getByText('프라이버시 설정', { exact: true }).waitFor();
 }
@@ -129,7 +129,7 @@ async function verifyAuth({ browser, origin, apiOrigin }) {
     await page.getByText('프라이버시 설정', { exact: true }).waitFor();
     assert.equal(await page.locator('textarea').inputValue(), bio);
 
-    await page.getByRole('button', { name: '👤', exact: true }).click();
+    await page.getByRole('button', { name: '계정 메뉴', exact: true }).click();
     await Promise.all([
       responseFor(page, apiOrigin, '/api/auth/logout', 'POST', 200),
       page.getByRole('button', { name: '로그아웃', exact: true }).click(),

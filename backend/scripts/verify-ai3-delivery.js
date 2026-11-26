@@ -7,7 +7,6 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
-const jwt = require('../node_modules/jsonwebtoken');
 
 function configureEnvironment() {
   for (const name of ['AI1_DATABASE_URL', 'AI1_REDIS_URL']) {
@@ -66,7 +65,7 @@ function faultProxy(upstream, faults, evidence) {
       const chunks = [];
       for await (const chunk of req) chunks.push(chunk);
       const body = Buffer.concat(chunks);
-      const isLog = req.method === 'POST' && req.url.endsWith('/log');
+      const isLog = req.method === 'POST' && /^\/api\/v2\/sessions\/[\da-f-]+\/log$/i.test(req.url);
       const isRefresh = req.url === '/api/auth/refresh';
       const isEnd = req.method === 'POST' && req.url.endsWith('/end');
       if (isLog) evidence.log_payloads.push(JSON.parse(body.toString()));
@@ -136,6 +135,7 @@ function faultProxy(upstream, faults, evidence) {
 }
 
 async function verify(base, proxy, db, temp, faults, evidence) {
+  const jwt = require('../node_modules/jsonwebtoken');
   async function request(method, route, token, body, status = 200) {
     const response = await fetch(base + route, {
       method,
@@ -359,7 +359,11 @@ async function main() {
   }
 }
 
-main().catch(error => {
-  console.error(`AI-3 verification failed: ${error.message}`);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch(error => {
+    console.error(`AI-3 verification failed: ${error.message}`);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { faultProxy, listen };

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { apiFetch, readJson, getErrorMessage } from '../api'
 
@@ -27,6 +27,7 @@ interface ShareDialogProps {
 }
 
 function ShareDialog({ sessionId, onClose }: ShareDialogProps) {
+  const dialogRef = useRef<HTMLDialogElement>(null)
   const [maxScope, setMaxScope] = useState<SessionScope | null>(null) // 내 기본 세션 공개 범위
   const [myGroups, setMyGroups] = useState<MyGroup[]>([])
   const [scope, setScope] = useState<ShareScope | null>(null)
@@ -36,6 +37,12 @@ function ShareDialog({ sessionId, onClose }: ShareDialogProps) {
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [done, setDone] = useState(false)
+
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current
+    dialog?.showModal()
+    return () => dialog?.close()
+  }, [])
 
   // 창을 열 때: 내 공개 범위와 내 그룹 목록을 함께 불러온다
   useEffect(() => {
@@ -107,14 +114,17 @@ function ShareDialog({ sessionId, onClose }: ShareDialogProps) {
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4 print:hidden"
-      role="dialog"
-      aria-modal="true"
-      aria-label="세션 공유하기"
+    <dialog
+      ref={dialogRef}
+      className="fixed inset-0 m-auto max-h-[calc(100%_-_2rem)] w-[calc(100%_-_2rem)] max-w-md overflow-auto rounded-xl bg-surface shadow-lg backdrop:bg-black/30 print:hidden"
+      aria-labelledby="share-heading"
+      onCancel={(event) => {
+        event.preventDefault()
+        onClose()
+      }}
     >
-      <div className="bg-surface rounded-xl shadow-lg p-6 w-full max-w-md">
-        <p className="text-lg font-bold text-primary mb-4">세션 공유하기</p>
+      <div className="p-6">
+        <p id="share-heading" className="text-lg font-bold text-primary mb-4">세션 공유하기</p>
 
         {loading && <p className="text-sm text-secondary">불러오는 중...</p>}
 
@@ -181,6 +191,7 @@ function ShareDialog({ sessionId, onClose }: ShareDialogProps) {
 
                     {scope === 'GROUP' && (
                       <select
+                        aria-label="공유할 그룹"
                         value={groupId}
                         onChange={(e) => setGroupId(e.target.value)}
                         className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mb-4"
@@ -232,7 +243,7 @@ function ShareDialog({ sessionId, onClose }: ShareDialogProps) {
           )
         )}
       </div>
-    </div>
+    </dialog>
   )
 }
 

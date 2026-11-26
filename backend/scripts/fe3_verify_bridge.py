@@ -1,4 +1,4 @@
-"""FE-3 verifier companion: the CLI explicitly selects a real camera or a frame fixture."""
+"""Browser verifier companion: the CLI explicitly selects a real camera or a frame fixture."""
 import json
 import os
 from pathlib import Path
@@ -13,7 +13,7 @@ from local_ai_web_runtime import WebAIRuntime
 from local_ai import atomic_json
 
 
-def fixture_capture(directory):
+def fixture_capture(directory, recovery=False):
     """Use real elapsed time and the production calibration, scorer, queue and sender."""
     def capture(on_minute, minutes=0, camera_index=0, stop_event=None,
                 on_event=lambda _event: None, on_preview=None):
@@ -36,10 +36,12 @@ def fixture_capture(directory):
                 raise RuntimeError("verification camera disconnected")
             if on_preview is not None:
                 on_preview(jpeg)
-            # Centered during calibration. Beyond the gaze threshold during measurement.
-            gaze = 0.5 if collector.baseline is None else 0.9
-            frame = FrameMeasurement(monotonic_ns() // 1_000_000, True, gaze, 0.5,
-                                     0.1, 0.1, False, 0, 0, 0)
+            timestamp_ms = monotonic_ns() // 1_000_000
+            if recovery and collector.completed_windows >= 1:
+                frame = FrameMeasurement(timestamp_ms, False)
+            else:
+                gaze = 0.5 if collector.baseline is None else 0.9
+                frame = FrameMeasurement(timestamp_ms, True, gaze, 0.5, 0.1, 0.1, False, 0, 0, 0)
             if collector.observe(frame):
                 break
             stop.wait(1 / 10)
@@ -73,7 +75,8 @@ def live_capture(directory):
 
         def minute(result):
             on_minute(result)
-            stage("minute_completed", minute_samples=result["samples"])
+            stage("minute_completed", minute_samples=result["samples"],
+                  emitted_minutes=progress.get("emitted_minutes", 0) + 1)
 
         stage("opening_camera")
         return collect_camera(minute, on_event=event, retry_calibration=True, **options)
@@ -81,28 +84,31 @@ def live_capture(directory):
     return capture
 
 
-def queue_evidence(state_root):
+def queue_evidence(state_root, recovery=False):
     rows = []
     sessions = []
     for file in state_root.rglob("outbox.sqlite3"):
         with sqlite3.connect(file.as_uri() + "?mode=ro", uri=True) as db:
-            for session, status, stored in db.execute("SELECT session_id, status, payload FROM outbox"):
+            for session, status, stored in db.execute("SELECT session_id, status, payload FROM outbox ORDER BY rowid"):
                 payload = json.loads(stored)
                 rows.append({"session_id": session, "status": status, "client_log_id": payload["client_log_id"],
                              "score": payload["total"], "measured_at": payload["measured_at"]})
+                if recovery:
+                    rows[-1]["payload"] = payload
             sessions.extend(dict(session_id=row[0], status=row[1]) for row in db.execute(
                 "SELECT session_id, status FROM delivery_sessions"))
     return {"logs": rows, "delivery_sessions": sessions}
 
 
 def main():
-    mode, = sys.argv[1:]
-    if mode not in {"fixture", "live"}:
+    mode, *options = sys.argv[1:]
+    if mode not in {"fixture", "live"} or options not in ([], ["--recovery"]):
         raise ValueError("invalid capture mode")
+    recovery = bool(options)
     directory = Path(os.environ["LOCAL_ENV_FILE"]).resolve().parent
     state_root = directory / "fe3-state"
     manager = WebAIRuntime(os.environ["LOCAL_VERIFY_URL"], state_root=state_root,
-                           capture=fixture_capture(directory) if mode == "fixture" else live_capture(directory))
+                           capture=fixture_capture(directory, recovery) if mode == "fixture" else live_capture(directory))
     server = create_server("127.0.0.1", 0, os.environ["LOCAL_VERIFY_URL"],
                            os.environ["LOCAL_FRONTEND_ORIGIN"], manager)
     done = Event()
@@ -115,7 +121,7 @@ def main():
             server.handle_request()
     finally:
         server.server_close()
-    (directory / "fe3-queue.json").write_text(json.dumps(queue_evidence(state_root)), encoding="utf-8")
+    (directory / "fe3-queue.json").write_text(json.dumps(queue_evidence(state_root, recovery)), encoding="utf-8")
 
 
 if __name__ == "__main__":

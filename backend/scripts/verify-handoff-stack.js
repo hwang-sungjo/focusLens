@@ -7,6 +7,7 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const { ensureLocalEnv } = require('./local-env');
+const { prepareHistory } = require('./tests/fe4-history.cjs');
 
 const repoRoot = path.resolve(__dirname, '../..');
 const PRIVATE_KEYS = new Set([
@@ -38,7 +39,7 @@ async function cameraProgress(directory) {
       'camera_measurement_started', 'minute_completed', 'minute_skipped'];
     if (!stages.includes(record.stage)) return null;
     const summary = { camera_stage: record.stage };
-    for (const key of ['calibration_samples', 'minute_samples']) {
+    for (const key of ['calibration_samples', 'minute_samples', 'emitted_minutes']) {
       if (Number.isSafeInteger(record[key]) && record[key] >= 0) summary[key] = record[key];
     }
     return summary;
@@ -51,6 +52,31 @@ async function availableBrowserOrigin() {
   const origin = 'http://127.0.0.1:' + socket.address().port;
   await new Promise((resolve, reject) => socket.close(error => error ? reject(error) : resolve()));
   return origin; // Vite later binds this exact port with strictPort before opening any pages.
+}
+
+async function checkRecoveryDatabase(sql, recovery) {
+  const { session_id, report_id, minutes, avg_focus_score } = recovery;
+  // Browser responses are untrusted. Only this validated session UUID enters the query.
+  assert.match(session_id, /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i);
+  assert.equal(minutes.length, 2);
+  assert.equal(new Set(minutes.map(minute => minute.client_log_id)).size, 2);
+  const persisted = JSON.parse(await sql(`SELECT json_build_object(
+    'status', s.status,
+    'minutes', (SELECT json_agg(json_build_object(
+      'client_log_id', client_log_id, 'measured_ms', round(extract(epoch FROM measured_at AT TIME ZONE 'UTC') * 1000),
+      'score', focus_score, 'gaze', gaze_score, 'blink', blink_score, 'head', head_score,
+      'face_detected', face_detected, 'attention_state', attention_state) ORDER BY minute_index)
+      FROM concentration_logs WHERE session_id = s.id),
+    'reports', (SELECT json_agg(json_build_object('id', id, 'score', summary_json->'avg_focus_score',
+      'total_logs', summary_json->'total_logs')) FROM reports WHERE session_id = s.id))
+    FROM sessions s WHERE s.id = '${session_id}'`));
+  assert.deepEqual(persisted, {
+    status: 'COMPLETED',
+    minutes: minutes.map(({ client_log_id, measured_at, score, gaze, blink, head, face_detected, attention_state }) =>
+      ({ client_log_id, measured_ms: Date.parse(measured_at), score, gaze, blink, head, face_detected, attention_state })),
+    reports: [{ id: report_id, score: avg_focus_score, total_logs: 2 }],
+  }, 'Expected both original minutes and one completed report in PostgreSQL.');
+  recovery.postgres_verified = true;
 }
 
 // Seed output contains known passwords. Docker diagnostics may contain secrets.
@@ -114,15 +140,16 @@ async function command(program, args, { env, operation, signal, timeoutMs = 600_
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes('--help') || args.includes('-h')) {
-    console.log('Usage: node backend/scripts/verify-handoff-stack.js [--browser | --fe3 [--live]]');
+    console.log('Usage: node backend/scripts/verify-handoff-stack.js [--browser | --fe3 [--live] | --fe4 [--live]]');
     console.log('Builds a separate local stack, seeds it, checks frontend API contracts, and removes only its own resources.');
     console.log('HTTP mode uses LOCAL_FRONTEND_ORIGIN (default http://localhost:5173). Browser mode uses two temporary loopback ports.');
     return;
   }
-  const bridgeMode = args[0] === '--fe3' && (args.length === 1 || (args.length === 2 && args[1] === '--live'));
+  const recoveryMode = args[0] === '--fe4';
+  const bridgeMode = (recoveryMode || args[0] === '--fe3') && (args.length === 1 || (args.length === 2 && args[1] === '--live'));
   const browserMode = bridgeMode || (args.length === 1 && args[0] === '--browser');
-  assert.ok(browserMode || args.length === 0, 'Expected no arguments, --browser, or --fe3 [--live].');
-  const label = bridgeMode ? 'FE-3 isolated AI bridge checks'
+  assert.ok(browserMode || args.length === 0, 'Expected no arguments, --browser, --fe3 [--live], or --fe4 [--live].');
+  const label = recoveryMode ? 'FE-4 isolated product checks' : bridgeMode ? 'FE-3 isolated AI bridge checks'
     : browserMode ? 'FE-2 isolated browser checks' : 'LBE-5 isolated handoff checks';
   const origin = frontendOrigin(browserMode ? await availableBrowserOrigin()
     : process.env.LOCAL_FRONTEND_ORIGIN || 'http://localhost:5173');
@@ -175,11 +202,15 @@ async function main() {
     assert.equal(views, 5, 'Expected all 5 query Views');
     await composeRun(['run', '--rm', '--no-deps', '--entrypoint', 'node', 'migrate', '/app/prisma/seed.js'],
       'Seed only the isolated database', { timeoutMs: 90_000 });
+    if (recoveryMode) {
+      progress('prepare_historical_reports_and_shared_feed');
+      await prepareHistory({ project, sql, composeRun });
+    }
 
     const address = await composeRun(['port', 'backend', '3000'], 'Find isolated API port', { timeoutMs: 30_000 });
     assert.match(address, /^127\.0\.0\.1:\d+$/, 'Verification API must bind to an isolated loopback port');
     const verifyEnv = { ...env, LOCAL_VERIFY_URL: `http://${address}` };
-    progress(bridgeMode ? 'verify_browser_camera_queue_and_report'
+    progress(recoveryMode ? 'verify_two_minutes_recovery_history_and_accessibility' : bridgeMode ? 'verify_browser_camera_queue_and_report'
       : browserMode ? 'verify_browser_auth_privacy_groups' : 'verify_frontend_cookie_privacy_and_group_contracts');
     const verifier = browserMode ? 'verify-frontend-browser.cjs' : 'verify-frontend-handoff.js';
     const verifierArgs = bridgeMode ? args : [];
@@ -194,12 +225,15 @@ async function main() {
       progressTimer.unref();
     }
     const checked = await command(process.execPath, [path.join(__dirname, verifier), ...verifierArgs], {
-      env: verifyEnv, operation: label, signal: controller.signal, timeoutMs: browserMode ? 300_000 : 180_000,
+      env: verifyEnv, operation: label, signal: controller.signal, timeoutMs: recoveryMode ? 480_000 : browserMode ? 300_000 : 180_000,
     });
     try { apiSummary = publicSummary(JSON.parse(checked.output || checked.diagnostics)); }
     catch (_error) { throw new Error('Frontend checks did not return a JSON summary.'); }
     if (checked.code !== 0) throw new Error(label + ' failed.');
-    if (bridgeMode) {
+    if (recoveryMode) {
+      progress('verify_both_persisted_minutes_and_report');
+      await checkRecoveryDatabase(sql, apiSummary.checks.recovery);
+    } else if (bridgeMode) {
       progress('verify_persisted_session_log_and_report');
       const measurement = apiSummary.checks.measurement;
       // IDs originate in browser responses. Validate before using them in this test query.

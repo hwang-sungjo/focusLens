@@ -67,11 +67,12 @@ function RegisterPage() {
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div>
-            <label className="block text-sm font-medium text-primary mb-1">
+            <label htmlFor="register-name" className="block text-sm font-medium text-primary mb-1">
               이름
             </label>
             <input
               type="text"
+              id="register-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="홍길동"
@@ -81,11 +82,12 @@ function RegisterPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-primary mb-1">
+            <label htmlFor="register-nickname" className="block text-sm font-medium text-primary mb-1">
               닉네임
             </label>
             <input
               type="text"
+              id="register-nickname"
               value={nickname}
               onChange={(e) => setNickname(e.target.value)}
               placeholder="focus_master"
@@ -95,11 +97,12 @@ function RegisterPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-primary mb-1">
+            <label htmlFor="register-email" className="block text-sm font-medium text-primary mb-1">
               이메일
             </label>
             <input
               type="email"
+              id="register-email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="you@example.com"
@@ -109,11 +112,12 @@ function RegisterPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-primary mb-1">
+            <label htmlFor="register-password" className="block text-sm font-medium text-primary mb-1">
               비밀번호
             </label>
             <input
               type="password"
+              id="register-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"

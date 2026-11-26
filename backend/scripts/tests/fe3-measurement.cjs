@@ -5,10 +5,16 @@ const path = require('node:path');
 const readline = require('node:readline');
 const { signUpAndLogin } = require('./fe2-auth.cjs');
 
-async function startCompanion(mode) {
+async function startCompanion(mode, recoveryProxyOrigin) {
   const python = process.env.FOCUSLENS_AI_PYTHON || process.env.AI3_PYTHON || 'python3.11';
   const file = path.resolve(__dirname, '../fe3_verify_bridge.py');
-  const child = spawn(python, ['-B', file, mode], { stdio: ['ignore', 'pipe', 'ignore'] });
+  const args = ['-B', file, mode];
+  const env = { ...process.env };
+  if (recoveryProxyOrigin) {
+    env.LOCAL_VERIFY_URL = recoveryProxyOrigin;
+    args.push('--recovery');
+  }
+  const child = spawn(python, args, { env, stdio: ['ignore', 'pipe', 'ignore'] });
   const closed = new Promise(resolve => child.once('close', resolve));
   const lines = readline.createInterface({ input: child.stdout });
   async function stop() {
@@ -63,6 +69,18 @@ async function waitForCapture(page, bridgeOrigin, ready, timeout) {
     throw error;
   }
   return data;
+}
+
+async function checkMinuteDisplay(page, latest) {
+  const stateName = { FOCUSED: '집중 상태', NORMAL: '보통', DISTRACTED: '집중 이탈' }[latest.attention_state];
+  assert.ok(stateName);
+  await page.getByText(stateName, { exact: true }).waitFor();
+  const scorePanel = page.getByText('집중도', { exact: true }).locator('xpath=following-sibling::div[1]');
+  await scorePanel.getByText(latest.focus_score.toFixed(0), { exact: true }).waitFor();
+  for (const name of ['Gaze', 'Blink', 'Head']) {
+    const value = page.getByText(name, { exact: true }).locator('xpath=following-sibling::span');
+    assert.equal(await value.innerText(), latest[name.toLowerCase()].toFixed(0));
+  }
 }
 
 async function verifyMeasurement({ browser, origin, apiOrigin, bridgeOrigin, mode, temporary }) {
@@ -120,15 +138,7 @@ async function verifyMeasurement({ browser, origin, apiOrigin, bridgeOrigin, mod
     if (mode === 'fixture') assert.deepEqual(
       [latest.focus_score, latest.gaze, latest.blink, latest.head, latest.attention_state],
       [70, 0, 100, 100, 'FOCUSED']);
-    const stateName = { FOCUSED: '집중 상태', NORMAL: '보통', DISTRACTED: '집중 이탈' }[latest.attention_state];
-    assert.ok(stateName);
-    await page.getByText(stateName, { exact: true }).waitFor();
-    const scorePanel = page.getByText('집중도', { exact: true }).locator('xpath=following-sibling::div[1]');
-    await scorePanel.getByText(latest.focus_score.toFixed(0), { exact: true }).waitFor();
-    for (const name of ['Gaze', 'Blink', 'Head']) {
-      const value = page.getByText(name, { exact: true }).locator('xpath=following-sibling::span');
-      assert.equal(await value.innerText(), latest[name.toLowerCase()].toFixed(0));
-    }
+    await checkMinuteDisplay(page, latest);
 
     await bridgeResponse(page, bridgeOrigin, '/finish', () => button('세션 종료').click());
     await page.getByText('세션이 종료되었습니다. 수고하셨어요!', { exact: true }).waitFor();
@@ -155,4 +165,4 @@ async function verifyMeasurement({ browser, origin, apiOrigin, bridgeOrigin, mod
   }
 }
 
-module.exports = { startCompanion, checkQueue, verifyMeasurement };
+module.exports = { startCompanion, checkQueue, verifyMeasurement, bridgeResponse, waitForCapture, checkMinuteDisplay };
