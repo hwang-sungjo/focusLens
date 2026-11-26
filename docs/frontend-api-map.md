@@ -1,7 +1,7 @@
 # FocusLens 프런트엔드 API 매핑
 
 > 작성일: 2026-10-06  
-> FE-1 기준 `main@ba3e859`에 소셜·그룹을 포함한 11개 화면이 있다. FE-2에서 브라우저로 기존 화면의 실제 API 흐름을 검증한다.
+> FE-2에서 Chromium과 실제 로컬 API로 11개 화면을 검증했다. 다음 단계는 FE-3 세션 화면과 AI 실측 연결이다. [검증 범위](integration-readiness.md)
 > API 상세: `docs/api-spec.md`, 실행 명세: `docs/swagger.yaml`
 > 최신 로컬 실행·현재 화면 동작·검증 범위: [프런트 인계](frontend-handoff.md). 아래 표는 API 계약이며, 회원가입 후 로그인 화면으로 이동하는 현재 UX는 유지한다.
 

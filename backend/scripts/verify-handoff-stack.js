@@ -1,8 +1,9 @@
-// LBE-5: build, seed and test only a disposable local Compose project.
+// LBE-5 HTTP checks and FE-2 browser checks both run on a disposable Compose project.
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const fs = require('node:fs/promises');
+const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const { ensureLocalEnv } = require('./local-env');
@@ -28,6 +29,14 @@ function frontendOrigin(value) {
     && url.port && !url.username && !url.password && url.pathname === '/'
     && !url.search && !url.hash, 'LOCAL_FRONTEND_ORIGIN must be an explicit loopback HTTP origin with a port');
   return url.origin;
+}
+
+async function availableBrowserOrigin() {
+  const socket = net.createServer();
+  await new Promise((resolve, reject) => socket.once('error', reject).listen(0, '127.0.0.1', resolve));
+  const origin = 'http://127.0.0.1:' + socket.address().port;
+  await new Promise((resolve, reject) => socket.close(error => error ? reject(error) : resolve()));
+  return origin; // Vite later binds this exact port with strictPort before opening any pages.
 }
 
 // Seed output contains known passwords. Docker diagnostics may contain secrets.
@@ -90,14 +99,17 @@ async function command(program, args, { env, operation, signal, timeoutMs = 600_
 
 async function main() {
   const args = process.argv.slice(2);
-  if (args.length === 1 && ['--help', '-h'].includes(args[0])) {
-    console.log('Usage: node backend/scripts/verify-handoff-stack.js');
+  if (args.includes('--help') || args.includes('-h')) {
+    console.log('Usage: node backend/scripts/verify-handoff-stack.js [--browser]');
     console.log('Builds a separate local stack, seeds it, checks frontend API contracts, and removes only its own resources.');
-    console.log('Optional LOCAL_FRONTEND_ORIGIN defaults to http://localhost:5173. Existing projects are never selected.');
+    console.log('HTTP mode uses LOCAL_FRONTEND_ORIGIN (default http://localhost:5173). Browser mode uses two temporary loopback ports.');
     return;
   }
-  assert.equal(args.length, 0, 'Only --help is accepted; this verifier never targets an existing project.');
-  const origin = frontendOrigin(process.env.LOCAL_FRONTEND_ORIGIN || 'http://localhost:5173');
+  const browserMode = args.length === 1 && args[0] === '--browser';
+  assert.ok(browserMode || args.length === 0, 'Expected no arguments or --browser.');
+  const label = browserMode ? 'FE-2 isolated browser checks' : 'LBE-5 isolated handoff checks';
+  const origin = frontendOrigin(browserMode ? await availableBrowserOrigin()
+    : process.env.LOCAL_FRONTEND_ORIGIN || 'http://localhost:5173');
   const project = `focuslens-handoff-${randomUUID()}`;
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'focuslens-handoff-'));
   const env = {
@@ -150,21 +162,22 @@ async function main() {
     const address = await composeRun(['port', 'backend', '3000'], 'Find isolated API port', { timeoutMs: 30_000 });
     assert.match(address, /^127\.0\.0\.1:\d+$/, 'Verification API must bind to an isolated loopback port');
     const verifyEnv = { ...env, LOCAL_VERIFY_URL: `http://${address}` };
-    progress('verify_frontend_cookie_privacy_and_group_contracts');
-    const checked = await command(process.execPath, [path.join(__dirname, 'verify-frontend-handoff.js')], {
-      env: verifyEnv, operation: 'Frontend handoff API checks', signal: controller.signal, timeoutMs: 180_000,
+    progress(browserMode ? 'verify_browser_auth_privacy_groups' : 'verify_frontend_cookie_privacy_and_group_contracts');
+    const verifier = browserMode ? 'verify-frontend-browser.cjs' : 'verify-frontend-handoff.js';
+    const checked = await command(process.execPath, [path.join(__dirname, verifier)], {
+      env: verifyEnv, operation: label, signal: controller.signal, timeoutMs: browserMode ? 300_000 : 180_000,
     });
     try { apiSummary = publicSummary(JSON.parse(checked.output || checked.diagnostics)); }
-    catch (_error) { throw new Error('Frontend handoff checks did not return a safe JSON summary.'); }
-    if (checked.code !== 0) throw new Error('Frontend handoff API checks failed.');
+    catch (_error) { throw new Error('Frontend checks did not return a JSON summary.'); }
+    if (checked.code !== 0) throw new Error(label + ' failed.');
     result = {
-      result: 'LBE-5 isolated handoff checks passed', frontend_origin: origin,
+      result: label + ' passed', frontend_origin: origin,
       migrations, query_views: views, seed_completed: true,
-      api_checks: apiSummary, original_services_untouched: true,
+      [browserMode ? 'browser_checks' : 'api_checks']: apiSummary, original_services_untouched: true,
     };
   } catch (error) {
-    failure = { result: 'LBE-5 isolated handoff checks failed', stage,
-      error: error.message, ...(apiSummary && { api_checks: apiSummary }) };
+    failure = { result: label + ' failed', stage, error: error.message,
+      ...(apiSummary && { [browserMode ? 'browser_checks' : 'api_checks']: apiSummary }) };
   } finally {
     clearInterval(heartbeat);
     if (resourcesMayExist) {
@@ -183,7 +196,7 @@ async function main() {
     process.removeListener('SIGTERM', interrupt);
   }
   if (cleanupFailed) {
-    console.error(JSON.stringify({ result: 'LBE-5 isolated handoff checks failed', stage: 'cleanup',
+    console.error(JSON.stringify({ result: label + ' failed', stage: 'cleanup',
       error: 'Inspect the isolated verification project in Docker.', project }));
     process.exitCode = 1;
   } else if (failure) {
@@ -193,7 +206,7 @@ async function main() {
 }
 
 if (require.main === module) main().catch(() => {
-  console.error(JSON.stringify({ result: 'LBE-5 isolated handoff checks failed', stage: 'configuration',
+  console.error(JSON.stringify({ result: 'Isolated frontend checks failed', stage: 'configuration',
     error: 'Check the local verification arguments and environment.' }));
   process.exitCode = 1;
 });
