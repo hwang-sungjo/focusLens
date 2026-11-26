@@ -51,7 +51,7 @@
 
 모든 보호 API는 JWT 검증 후 Redis 로그아웃 블랙리스트를 조회한다. Redis 조회 실패 시 fail-closed 503을 반환한다. DB 연결 단절·연결 풀 대기 시간 초과는 503과 `데이터베이스에 일시적으로 연결할 수 없습니다.`를 반환한다. 500·503 응답의 `error`에는 실행 환경과 관계없이 내부 예외, SQL, 스택, 토큰, 비밀번호 해시를 포함하지 않는다.
 
-모든 응답에는 `X-Request-ID` 헤더가 포함된다. 클라이언트가 영문·숫자와 `._:-`로 구성된 128자 이하의 `X-Request-ID`를 보내면 이를 사용하고, 그렇지 않으면 서버가 UUID를 생성한다. 목록 API의 `page` 기본값은 1, `limit` 기본값은 20이며 `limit` 최댓값은 100이다. 동일 시각의 행도 순서가 바뀌지 않도록 각 목록은 `id`를 마지막 정렬 키로 사용한다.
+API 응답에는 `X-Request-ID` 헤더가 포함된다(CORS 미들웨어가 직접 반환하는 OPTIONS preflight 제외). 클라이언트가 영문·숫자와 `._:-`로 구성된 128자 이하의 `X-Request-ID`를 보내면 이를 사용하고, 그렇지 않으면 서버가 UUID를 생성한다. 목록 API의 `page` 기본값은 1, `limit` 기본값은 20이며 `limit` 최댓값은 100이다. 동일 시각의 행도 순서가 바뀌지 않도록 각 목록은 `id`를 마지막 정렬 키로 사용한다.
 
 ### 1.3 그룹 권한 판단 원칙
 
@@ -241,7 +241,7 @@ HttpOnly cookie를 사용하면 body는 생략할 수 있다.
 
 **Request Body**
 
-선택적으로 `{ "refresh_token": "opaque-token" }`을 전달한다. 생략하면 해당 사용자의 활성 Refresh Token을 모두 폐기한다.
+선택적으로 `{ "refresh_token": "opaque-token" }`을 전달한다. body에 없으면 HttpOnly 쿠키의 Refresh Token을 사용해 해당 family를 폐기한다. body와 쿠키 모두 없을 때 해당 사용자의 활성 Refresh Token을 모두 폐기한다.
 
 **Response `200`**
 

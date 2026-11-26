@@ -3,6 +3,8 @@
 저장소 루트에서 `npm run local:up`을 실행하면 로컬 PostgreSQL·Redis, 마이그레이션·조회 View, API를 순서대로 준비합니다. Node.js 22와 실행 중인 Docker Desktop(Docker Compose 포함)이 필요합니다.
 프런트엔드 및 AI 개발자분들은 아래 가이드에 따라 로컬 개발 환경을 세팅해 주시기 바랍니다.
 
+프런트 주소·쿠키·테스트 계정·권한·검증 결과는 [LBE-5 프런트 인계](frontend-handoff.md)를 기준으로 합니다. 현재 작업 develop과 원격 main의 프런트 차이도 이 문서에 기록했습니다.
+
 현재 API는 38개 operation, Prisma 모델 20개, migration 11개, 조회 View 5개입니다. AI-1~3의 연결 모듈과 검증 절차는 `docs/backend-plan.md`에 기록돼 있습니다. 일반 로컬 서버의 지속 AI 실행은 아래 `local:ai` 명령을 사용합니다.
 
 ---

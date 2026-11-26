@@ -207,13 +207,13 @@ JWT sub → sessions.id = :id 조회 → sessions.user_id === sub ?
   NO  → 403 "해당 세션에 대한 권한이 없습니다"
 ```
 
-현재 `ai/`에는 JWT를 전달받아 위 로그 API를 호출하는 Python 클라이언트 코드가 있다. 다만 웹캠 측정 루프와 연결되지 않았으며 자동 로그인·토큰 갱신도 구현되지 않았다. 백엔드는 고정 HTTP 요청으로 인증·권한 통합 검증을 완료했으며 실제 AI 측 자동 전송은 `docs/backend-plan.md`의 외부 연동 대기 항목이다.
+기존 `ai/`의 프레임 측정 명령은 유지한다. 별도 백엔드 도구 `local:ai`가 로그인·키체인·1분 집계·SQLite 큐·v2 전송·토큰 갱신·종료를 연결하며 LBE-4에서 실제 카메라 연속 측정을 검증했다. 실행 절차는 `docs/setting-guide.md`, 증거는 `docs/backend-plan.md`를 따른다.
 
 ---
 
 ## 5. 로그아웃 — Access 블랙리스트와 Refresh 폐기
 
-로그아웃 시 현재 Access Token을 Redis 블랙리스트에 등록하고 전달된 Refresh Token의 family를 폐기한다. Refresh Token을 생략하면 해당 사용자의 모든 활성 Refresh Token을 폐기한다.
+로그아웃 시 현재 Access Token을 Redis 블랙리스트에 등록한다. Refresh Token은 JSON body를 우선하고 없으면 HttpOnly 쿠키에서 읽어 해당 family를 폐기한다. body와 쿠키 모두 없을 때만 해당 사용자의 모든 활성 Refresh Token을 폐기한다.
 
 **엔드포인트**: `POST /api/auth/logout` (인증 필요)
 

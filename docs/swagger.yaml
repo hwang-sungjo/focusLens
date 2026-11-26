@@ -410,7 +410,7 @@ paths:
     post:
       tags: [auth]
       summary: 로그아웃
-      description: Access Token을 Redis 블랙리스트에 등록하고 해당 Refresh Token family를 폐기한다. refresh_token을 생략하면 사용자의 모든 활성 Refresh Token을 폐기한다.
+      description: Access Token을 Redis 블랙리스트에 등록한다. Refresh Token은 body 우선이며 없으면 쿠키에서 읽어 해당 family를 폐기한다. body와 쿠키 모두 없을 때 사용자의 모든 활성 Refresh Token을 폐기한다.
       operationId: authLogout
       security:
         - BearerAuth: []
