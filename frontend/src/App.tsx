@@ -7,7 +7,23 @@ import ReportPage from './pages/ReportPage'
 import ProfilePage from './pages/ProfilePage'
 import ProtectedRoute from './ProtectedRoute'
 import RegisterPage from './pages/RegisterPage'
+import RankingPage from './pages/RankingPage'
+import FeedPage from './pages/FeedPage'
+import FriendsPage from './pages/FriendsPage'
+import GroupsPage from './pages/GroupsPage'
+import GroupDetailPage from './pages/GroupDetailPage'
 import { apiFetch, clearAuth } from './api'
+
+// 위쪽 메뉴 목록 (넓은 화면·좁은 화면 메뉴가 같이 쓴다). 새 화면은 여기에 한 줄만 추가하면 된다.
+const NAV_LINKS = [
+  { to: '/dashboard', label: '대시보드' },
+  { to: '/session', label: '세션' },
+  { to: '/reports', label: '리포트' },
+  { to: '/feed', label: '피드' },
+  { to: '/rankings', label: '랭킹' },
+  { to: '/friends', label: '친구' },
+  { to: '/groups', label: '그룹' },
+]
 
 function AppContent() {
   const location = useLocation()
@@ -30,7 +46,7 @@ function AppContent() {
   return (
     <>
       {!hideNav && isLoggedIn && (
-        <nav className="bg-surface shadow-sm">
+        <nav className="bg-surface shadow-sm print:hidden">
           <div className="flex items-center justify-between px-6 py-3">
             <Link to="/dashboard" className="text-base sm:text-lg font-bold text-primary shrink-0">
               FocusLens
@@ -39,15 +55,11 @@ function AppContent() {
             <div className="flex items-center gap-3 sm:gap-6">
               {/* 넓은 화면: 메뉴 그대로 노출 */}
               <div className="hidden md:flex items-center gap-6">
-                <Link to="/dashboard" className="text-sm text-secondary hover:text-primary">
-                  대시보드
-                </Link>
-                <Link to="/session" className="text-sm text-secondary hover:text-primary">
-                  세션
-                </Link>
-                <Link to="/reports" className="text-sm text-secondary hover:text-primary">
-                  리포트
-                </Link>
+                {NAV_LINKS.map((link) => (
+                  <Link key={link.to} to={link.to} className="text-sm text-secondary hover:text-primary">
+                    {link.label}
+                  </Link>
+                ))}
               </div>
 
               {/* 좁은 화면: 햄버거 버튼 */}
@@ -90,27 +102,16 @@ function AppContent() {
           {/* 좁은 화면: 펼쳐지는 메뉴 */}
           {mobileMenuOpen && (
             <div className="md:hidden flex flex-col px-6 pb-3 gap-2">
-              <Link
-                to="/dashboard"
-                onClick={() => setMobileMenuOpen(false)}
-                className="text-sm text-secondary hover:text-primary py-1"
-              >
-                대시보드
-              </Link>
-              <Link
-                to="/session"
-                onClick={() => setMobileMenuOpen(false)}
-                className="text-sm text-secondary hover:text-primary py-1"
-              >
-                세션
-              </Link>
-              <Link
-                to="/reports"
-                onClick={() => setMobileMenuOpen(false)}
-                className="text-sm text-secondary hover:text-primary py-1"
-              >
-                리포트
-              </Link>
+              {NAV_LINKS.map((link) => (
+                <Link
+                  key={link.to}
+                  to={link.to}
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="text-sm text-secondary hover:text-primary py-1"
+                >
+                  {link.label}
+                </Link>
+              ))}
             </div>
           )}
         </nav>
@@ -144,6 +145,47 @@ function AppContent() {
           element={
             <ProtectedRoute>
               <ReportPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/feed"
+          element={
+            <ProtectedRoute>
+              <FeedPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/rankings"
+          element={
+            <ProtectedRoute>
+              <RankingPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/friends"
+          element={
+            <ProtectedRoute>
+              <FriendsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/groups"
+          element={
+            <ProtectedRoute>
+              <GroupsPage />
+            </ProtectedRoute>
+          }
+        />
+        {/* :id 자리에 그룹 ID가 들어간다 (예: /groups/3f2a...) */}
+        <Route
+          path="/groups/:id"
+          element={
+            <ProtectedRoute>
+              <GroupDetailPage />
             </ProtectedRoute>
           }
         />

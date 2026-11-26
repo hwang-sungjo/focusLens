@@ -7,3 +7,14 @@
   --color-bg: #F5ECD7;
   --color-surface: #FFFFFF;
 }
+/* 리포트 PDF 저장(인쇄) 설정: A4 한 장 기준 여백, 배경색이 빠지지 않게 */
+@media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+  body {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+}
