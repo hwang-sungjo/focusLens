@@ -2,8 +2,7 @@
 
 React와 TypeScript로 만든 FocusLens 웹 화면입니다. 백엔드 API(`backend/`)에 연결해 로그인, 학습 세션, 대시보드, 리포트, 프로필, 소셜(피드·랭킹·친구), 그룹 화면을 제공합니다.
 
-> 로컬 실행·인계 기준: [docs/frontend-handoff.md](../docs/frontend-handoff.md)
-> 이번 작업 트리의 기본 6화면 기준 문서입니다. 원격 `main@40bc369`에는 소셜·그룹 등 추가 화면과 개선이 이미 합쳐져 있으며, 현재 develop에는 아직 동기화되지 않았습니다. 다음 통합에서 기존 main 기능을 보존해 반영합니다.
+> FE-1 기준 `main@ba3e859`에는 11개 화면과 로컬 백엔드·AI 도구가 함께 있습니다. 다음 단계인 FE-2에서 각 화면의 실제 API 흐름을 검증합니다. [로컬 실행·인계 절차](../docs/frontend-handoff.md)
 
 ## 화면과 사용하는 API
 
@@ -86,7 +85,7 @@ React와 TypeScript로 만든 FocusLens 웹 화면입니다. 백엔드 API(`back
 | 위치 | 현재 | 바뀔 내용 |
 | --- | --- | --- |
 | `SessionPage.tsx`의 `sendDummyLog` | gaze·blink·head 점수를 `Math.random()`으로 만들고 `face_detected: true`를 고정 전송 | AI 측정값으로 교체. 점수를 누가 계산·전송할지(브라우저 또는 `ai/` Python 프로그램)는 팀 결정 대기 |
-| 같은 함수의 total 계산 | `gaze × 0.4 + blink × 0.3 + head × 0.3` (백엔드 `focusScore.js`와 동일) | 가중치 최종값이 정해지면 맞춤 |
+| 같은 함수의 total 계산 | `gaze × 0.3 + blink × 0.5 + head × 0.2` (백엔드 `focusScore.js`와 동일) | AI 연동 후에도 백엔드 계산식과 같게 유지 |
 | 세션 화면 웹캠 | 화면에 보여주기만 하고 분석에는 쓰지 않음 | AI 연동 방식이 정해지면 연결 |
 
 현재 화면의 더미 로그는 v1 API(`POST /api/sessions/:id/log`)로 1분마다 보냅니다. 실제 AI 도구는 v2를 사용하며, 프런트 통합에서는 전송 주체를 하나로 정해 중복 발송을 막아야 합니다.
@@ -108,9 +107,24 @@ React와 TypeScript로 만든 FocusLens 웹 화면입니다. 백엔드 API(`back
 ## 미구현
 
 - **백엔드 API가 없어 대기:** 세션 일시정지, 비밀번호 찾기, 알림 설정
-- **AI 쪽 작업 대기:** 실제 집중도 점수, 눈 감지 팝업, 카메라 보정
-- **기획서 "고도화" 항목:** 리포트 PDF 내보내기
-- **범위 합의 대기:** 친구, 소셜 피드, 랭킹, 그룹 화면. API는 백엔드에 구현돼 있습니다(`docs/frontend-api-map.md` 1절).
+- FE-3에서 세션 화면과 AI 도구의 실측 점수·상태·카메라 보정을 연결합니다.
+
+## 백엔드에 요청한 API
+
+아래 API가 없어도 화면은 우회 방법으로 동작합니다. 생기면 우회 화면을 줄이고 빠진 버튼을 넣을 수 있습니다. 경로는 제안이며 백엔드 규칙에 맞게 정합니다.
+
+| 우선 | 요청 | 제안 형태 | 지금 프런트 동작 |
+| --- | --- | --- | --- |
+| 높음 | 받은 그룹 초대 목록 | `GET /api/groups/invitations` (나에게 온 PENDING 초대) | 초대 코드를 메신저로 전달하고 [초대 코드로 가입]에 입력 |
+| 보통 | 친구 삭제 | `DELETE /api/connections/:connectionId` | 친구 목록에 [삭제] 없음 |
+| 보통 | 공유 취소 | `DELETE /api/session-shares/:id` (올린 사람만) | 피드 내 글에 [삭제] 없음 |
+| 보통 | 그룹 나가기 | 본인 내보내기 허용 또는 `POST /api/groups/:id/leave` | 일반 멤버용 [나가기] 없음 |
+| 보통 | 목표 달성률 | goals 응답에 기간 내 학습 분·평균 점수 추가 | 목표 수치만 표시, 진행 막대 없음 |
+| 보통 | 목표 수정·완료·삭제 | `PATCH`·`DELETE /api/groups/:id/goals/:goalId` | 목표가 계속 "진행 중" |
+| 낮음 | 목표 담당자 명단 | goals 응답에 assignees(멤버 ID·닉네임) 추가 | 담당 인원 수만 표시, 이미 담당인 사람을 고르면 409로 안내 |
+| 낮음 | 그룹 멤버 명단 | `GET /api/groups/:id/members` (멤버 누구나, 닉네임·역할만) | 일반 멤버는 "내 현황"만 |
+| 낮음 | 공개 그룹 둘러보기·바로 가입 | `GET /api/groups/public`, 코드 없는 가입 | 공개 그룹도 초대 코드로만 가입 |
+| 낮음 | 테스트용 시드 보강 | `seed.js`에 user_a 완료 세션 21개 이상 | [더 보기]·랭킹·피드를 직접 세션을 여러 번 만들어 확인 |
 
 ## 검증하지 못한 부분
 
@@ -158,6 +172,16 @@ npm run dev -- --host localhost --port 5173 --strictPort
 | `user_a@focuslens.dev` | `password_a123!` | 일반 유저 |
 | `user_b@focuslens.dev` | `password_b123!` | 일반 유저, A와 친구 관계 |
 | `admin@focuslens.dev` | `password_admin123!` | 관리자, 스터디 그룹 OWNER |
+
+시드 계정은 모두 **세션 비공개·랭킹 미참여**로 만들어집니다(새로 가입한 계정도 같음). 그대로면 공유·피드·랭킹이 비어 보이므로, 소셜 화면을 확인할 때는 각 계정 프로필에서 아래처럼 바꿉니다. 일부러 값을 다르게 두면 "비공개" 표시, 공유 범위 제한, 랭킹 제외, 그룹 현황 0 표시를 같이 확인할 수 있습니다.
+
+| 계정 | 기본 세션 공개 범위 | 점수 공개 | 학습 시간 공개 | 그룹 데이터 공유 | 랭킹 참여 |
+| --- | --- | --- | --- | --- | --- |
+| user_a | PUBLIC | PUBLIC | PUBLIC | 켜기 | 켜기 |
+| user_b | FRIENDS | FRIENDS | PRIVATE | 켜기 | 켜기 |
+| admin | PUBLIC | PRIVATE | PRIVATE | 끄기 | 끄기 |
+
+브라우저 하나에는 로그인이 하나뿐이라, 계정 여러 개는 일반 창·시크릿 창·다른 브라우저로 나눠 씁니다.
 
 ### 4. 알림·팝업 테스트 (개발용)
 

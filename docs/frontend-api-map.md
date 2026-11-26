@@ -1,7 +1,7 @@
 # FocusLens 프런트엔드 API 매핑
 
 > 작성일: 2026-10-06  
-> 상태: 작업 develop에는 기본 6화면, 원격 main@40bc369에는 소셜·그룹 추가 화면과 개선도 구현됨. 최신 프런트 동기화와 실제 API·AI 화면 통합은 후속 작업
+> FE-1 기준 `main@ba3e859`에 소셜·그룹을 포함한 11개 화면이 있다. FE-2에서 브라우저로 기존 화면의 실제 API 흐름을 검증한다.
 > API 상세: `docs/api-spec.md`, 실행 명세: `docs/swagger.yaml`
 > 최신 로컬 실행·현재 화면 동작·검증 범위: [프런트 인계](frontend-handoff.md). 아래 표는 API 계약이며, 회원가입 후 로그인 화면으로 이동하는 현재 UX는 유지한다.
 
@@ -9,7 +9,7 @@
 
 | 화면·기능 | API | 주요 처리 |
 | --- | --- | --- |
-| 회원가입 | `POST /api/auth/register` | Access Token 사용, Refresh Token은 HttpOnly cookie 사용 |
+| 회원가입 | `POST /api/auth/register` | 성공하면 로그인 화면으로 이동 |
 | 로그인 | `POST /api/auth/login` | 1시간 Access Token 사용, 30일 Refresh cookie 수신 |
 | 토큰 갱신 | `POST /api/auth/refresh` | 1회 회전 후 원 요청 1회 재시도 |
 | 로그아웃 | `POST /api/auth/logout` | 로컬 토큰 제거, Access 블랙리스트와 Refresh family 폐기 |
@@ -48,7 +48,7 @@
 | 상태 | 화면 처리 |
 | --- | --- |
 | 400 | 입력 필드 또는 요청 조건 오류 표시 |
-| 401 | Refresh Token으로 1회 갱신 뒤 원 요청 재시도, 실패하면 로그인 화면 이동 |
+| 401 | 보호 요청은 쿠키로 한 번 갱신한 뒤 재시도. 무효 Refresh 응답은 재로그인, 갱신 중 429·5xx·네트워크 오류는 로그인 상태 유지 |
 | 403 | 로그인 상태를 유지하고 권한 부족 안내 |
 | 404 | 삭제·비공개·없는 리소스 안내 후 상위 화면 이동 제공 |
 | 409 | 중복 요청 또는 이미 변경된 상태 안내, 목록 새로고침 제공 |
@@ -61,4 +61,4 @@
 - 토큰, 비밀번호, Refresh Token을 콘솔·분석 이벤트·오류 리포트에 기록하지 않는다.
 - 프라이버시로 마스킹된 필드를 다른 API 결과와 결합해 복원하지 않는다.
 - 그룹 관리 버튼은 역할에 따라 숨기되 서버 403을 최종 권한 판단으로 사용한다.
-- 제품 프런트 소스와 배포 주소가 정해지면 토큰 저장 방식과 운영 CORS origin을 최종 확정한다.
+- 웹 클라이언트는 Access Token을 localStorage에 보관하고 Refresh Token은 HttpOnly 쿠키로 전송한다. 운영 CORS origin은 배포 주소가 정해질 때 확정한다.
