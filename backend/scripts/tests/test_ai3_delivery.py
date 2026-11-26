@@ -1,7 +1,9 @@
 import json
 import os
+import sqlite3
 import sys
 import tempfile
+import threading
 import unittest
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
@@ -55,6 +57,142 @@ class DeliveryTests(unittest.TestCase):
         with self.assertRaises(DeliveryBlocked) as error:
             operation()
         self.assertEqual(error.exception.code, code)
+
+    def run_thread(self, operation):
+        completed = threading.Event()
+        outcome = {}
+
+        def run():
+            try:
+                outcome["result"] = operation()
+            except BaseException as error:
+                outcome["error"] = error
+            finally:
+                completed.set()
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        return thread, completed, outcome
+
+    def test_camera_enqueue_is_durable_while_http_delivery_is_blocked(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        def server(request):
+            entered.set()
+            if not release.wait(5):
+                raise RuntimeError("test HTTP release timed out")
+            return receipt(request)
+
+        client = self.client(server, max_retries=0)
+        client.enqueue(SESSION, payload())
+        sender, sent, delivery = self.run_thread(lambda: client.drain(SESSION))
+        producer = None
+        try:
+            self.assertTrue(entered.wait(2), "delivery reached the blocked HTTP request")
+            second = payload()
+            producer, enqueued, capture = self.run_thread(lambda: client.enqueue(SESSION, second))
+            self.assertTrue(enqueued.wait(2), "camera enqueue must not wait for HTTP")
+            self.assertNotIn("error", capture)
+            self.assertFalse(sent.is_set(), "HTTP remains blocked after the camera commit")
+            # A separate connection sees the completed commit before delivery resumes.
+            with sqlite3.connect(self.path) as reader:
+                count = reader.execute("SELECT count(*) FROM outbox WHERE session_id=?", (SESSION,)).fetchone()[0]
+            self.assertEqual(count, 2)
+        finally:
+            release.set()
+            sender.join(5)
+            if producer is not None:
+                producer.join(5)
+        self.assertFalse(sender.is_alive())
+        self.assertNotIn("error", delivery)
+        self.assertEqual(delivery["result"]["status"], "pending")
+        self.assertEqual(delivery["result"]["pending"], 1)
+        self.assertEqual(client.drain(SESSION)["sent"], 2)
+
+    def test_finishing_blocks_new_camera_rows_without_holding_the_database_during_http(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        def server(request):
+            if request.url.path.endswith("/end"):
+                return ok({"status": "COMPLETED"})
+            entered.set()
+            if not release.wait(5):
+                raise RuntimeError("test HTTP release timed out")
+            return receipt(request)
+
+        client = self.client(server, max_retries=0)
+        client.enqueue(SESSION, payload())
+        finisher, finished, finish = self.run_thread(lambda: client.finish_session(SESSION))
+        producer = None
+        try:
+            self.assertTrue(entered.wait(2))
+            producer, rejected, capture = self.run_thread(lambda: client.enqueue(SESSION, payload()))
+            self.assertTrue(rejected.wait(2), "closing check must not wait for HTTP")
+            self.assertIsInstance(capture.get("error"), DeliveryBlocked)
+            self.assertEqual(capture["error"].code, "session_closing")
+            self.assertFalse(finished.is_set())
+            with sqlite3.connect(self.path) as reader:
+                state = reader.execute("SELECT status FROM delivery_sessions WHERE session_id=?", (SESSION,)).fetchone()[0]
+                count = reader.execute("SELECT count(*) FROM outbox WHERE session_id=?", (SESSION,)).fetchone()[0]
+            self.assertEqual(state, "closing")
+            self.assertEqual(count, 1)
+        finally:
+            release.set()
+            finisher.join(5)
+            if producer is not None:
+                producer.join(5)
+        self.assertFalse(finisher.is_alive())
+        self.assertNotIn("error", finish)
+        self.assertEqual(finish["result"]["status"], "COMPLETED")
+
+    def test_concurrent_drains_serialize_refresh_rotation(self):
+        refreshing = threading.Event()
+        release = threading.Event()
+        refreshes = []
+
+        def server(request):
+            if request.url.path.endswith("/refresh"):
+                refreshes.append(request)
+                refreshing.set()
+                if not release.wait(5):
+                    raise RuntimeError("test refresh release timed out")
+                return ok({"access_token": "new-access", "refresh_token": "new-refresh"})
+            if request.headers["Authorization"] == "Bearer secret-access":
+                return httpx.Response(401)
+            self.assertEqual(request.headers["Authorization"], "Bearer new-access")
+            return receipt(request)
+
+        client = self.client(server, max_retries=0)
+        other_session = str(uuid4())
+        client.enqueue(SESSION, payload())
+        client.enqueue(other_session, payload())
+        first, _, first_result = self.run_thread(lambda: client.drain(SESSION))
+        second = None
+        try:
+            self.assertTrue(refreshing.wait(2))
+            second_started = threading.Event()
+
+            def drain_second():
+                second_started.set()
+                return client.drain(other_session)
+
+            second, second_done, second_result = self.run_thread(drain_second)
+            self.assertTrue(second_started.wait(2))
+            self.assertFalse(second_done.is_set(), "the other worker waits for token rotation")
+        finally:
+            release.set()
+            first.join(5)
+            if second is not None:
+                second.join(5)
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertNotIn("error", first_result)
+        self.assertNotIn("error", second_result)
+        self.assertEqual(first_result["result"]["sent"], 1)
+        self.assertEqual(second_result["result"]["sent"], 1)
+        self.assertEqual(len(refreshes), 1)
 
     def test_offline_restart_replays_identical_payload_once(self):
         def offline(request):

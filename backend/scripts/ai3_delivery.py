@@ -3,6 +3,9 @@
 The caller supplies a token store. Credentials never enter the SQLite outbox.
 Only one process owns an outbox, so rotating refresh tokens and ending a session
 cannot race another worker using the same queue.
+
+One capture thread may enqueue while one delivery worker performs HTTP requests.
+Stop and join workers before closing the client.
 """
 import fcntl
 import hashlib
@@ -109,6 +112,9 @@ class DeliveryClient:
         self.random = random
         self.max_retries = max_retries
         self._mutex = threading.RLock()
+        # SQLite transactions stay short so a completed camera minute can be
+        # committed while delivery waits on HTTP, secure storage or backoff.
+        self._delivery_mutex = threading.RLock()
         self._owns_http = http is None
         self.http = http or httpx.Client(timeout=10, follow_redirects=False)
         path = Path(queue_path)
@@ -199,23 +205,30 @@ class DeliveryClient:
             return [{**dict(row), "payload": json.loads(row["payload"])} for row in rows]
 
     def _mark(self, session_id, client_id, status, error=None):
-        with self.db:
+        with self._mutex, self.db:
             self.db.execute("UPDATE outbox SET status=?,last_error=? WHERE session_id=? AND client_log_id=?",
                             (status, error, session_id, client_id))
 
     def _request(self, method, path, payload=None):
+        # Both the worker and any authenticated control request use this lock;
+        # a rotating Refresh Token must never be used by concurrent requests.
+        with self._delivery_mutex:
+            return self._request_serialized(method, path, payload)
+
+    def _request_serialized(self, method, path, payload=None):
         tokens = self.tokens.get()
         response = self.http.request(method, self.base_url + path, json=payload,
                                      headers={"Authorization": "Bearer " + tokens["access_token"]})
         if response.status_code != 401:
             return response
         fingerprint = hashlib.sha256(tokens["refresh_token"].encode()).hexdigest()
-        uncertain = self.db.execute("SELECT value FROM delivery_metadata WHERE name='refresh_in_flight'").fetchone()
+        with self._mutex:
+            uncertain = self.db.execute("SELECT value FROM delivery_metadata WHERE name='refresh_in_flight'").fetchone()
         if uncertain and uncertain["value"] == fingerprint:
             raise DeliveryBlocked("authentication_required")
         # Persist intent before transmission. A response lost after rotation (or
         # a process crash here) must never cause reuse of the old refresh token.
-        with self.db:
+        with self._mutex, self.db:
             self.db.execute("INSERT OR REPLACE INTO delivery_metadata(name,value) VALUES ('refresh_in_flight',?)",
                             (fingerprint,))
         try:
@@ -243,7 +256,7 @@ class DeliveryClient:
         return response
 
     def _clear_refresh_guard(self):
-        with self.db:
+        with self._mutex, self.db:
             self.db.execute("DELETE FROM delivery_metadata WHERE name='refresh_in_flight'")
 
     def _pause(self, retry, response):
@@ -276,7 +289,7 @@ class DeliveryClient:
         raise DeliveryBlocked("retry_exhausted")
 
     def drain(self, session_id):
-        with self._mutex:
+        with self._delivery_mutex:
             status = "drained"
             for row in self.records(session_id):
                 if row["status"] != "pending":
@@ -284,7 +297,7 @@ class DeliveryClient:
                 client_id = row["client_log_id"]
 
                 def attempt():
-                    with self.db:
+                    with self._mutex, self.db:
                         self.db.execute("UPDATE outbox SET attempts=attempts+1 WHERE session_id=? AND client_log_id=?",
                                         (session_id, client_id))
 
@@ -312,6 +325,9 @@ class DeliveryClient:
             counts = {key: sum(row["status"] == key for row in rows) for key in ("sent", "pending", "failed", "discarded")}
             if counts["failed"]:
                 status = "failed"
+            elif counts["pending"] and status == "drained":
+                # Capture can append after the delivery snapshot was taken.
+                status = "pending"
             return {**counts, "status": status}
 
     def discard(self, session_id, client_log_id, reason):
@@ -325,8 +341,8 @@ class DeliveryClient:
                 raise DeliveryBlocked("not_a_failed_log")
 
     def finish_session(self, session_id):
-        with self._mutex:
-            with self.db:
+        with self._delivery_mutex:
+            with self._mutex, self.db:
                 self.db.execute("INSERT OR IGNORE INTO delivery_sessions(session_id) VALUES (?)", (session_id,))
                 stored = self.db.execute("SELECT * FROM delivery_sessions WHERE session_id=?", (session_id,)).fetchone()
                 if stored["status"] == "ended":
@@ -348,7 +364,7 @@ class DeliveryClient:
                 report = self._deliver("GET", f"/api/reports/{session_id}")
                 data = {"session_id": session_id, "status": "COMPLETED", "report_id": report["report_id"],
                         "summary": report["summary_json"]}
-            with self.db:
+            with self._mutex, self.db:
                 self.db.execute("UPDATE delivery_sessions SET status='ended',end_data=? WHERE session_id=?",
                                 (json.dumps(data), session_id))
             return data

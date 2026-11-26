@@ -3,7 +3,7 @@
 저장소 루트에서 `npm run local:up`을 실행하면 로컬 PostgreSQL·Redis, 마이그레이션·조회 View, API를 순서대로 준비합니다. Node.js 22와 실행 중인 Docker Desktop(Docker Compose 포함)이 필요합니다.
 프런트엔드 및 AI 개발자분들은 아래 가이드에 따라 로컬 개발 환경을 세팅해 주시기 바랍니다.
 
-현재 API는 38개 operation, Prisma 모델 20개, migration 11개, 조회 View 5개입니다. AI-1~3의 연결 모듈과 검증 절차는 `docs/backend-plan.md`에 기록돼 있습니다. 일반 로컬 서버를 사용하는 지속 AI 실행은 LBE-4에서 준비합니다.
+현재 API는 38개 operation, Prisma 모델 20개, migration 11개, 조회 View 5개입니다. AI-1~3의 연결 모듈과 검증 절차는 `docs/backend-plan.md`에 기록돼 있습니다. 일반 로컬 서버의 지속 AI 실행은 아래 `local:ai` 명령을 사용합니다.
 
 ---
 
@@ -126,6 +126,48 @@ curl --fail http://localhost:3000/health
 
 ## 🤖 AI 개발 팀 전달 사항
 
+### 일반 로컬 서버에 연속 측정 연결
+
+별도 백엔드 실행 도구가 기존 AI의 카메라·3초 보정·1분 집계를 재사용해 SQLite 영속 큐와 로그 v2를 연결합니다. 기존 `focuslens-ai` 명령은 계속 프레임 측정 도구로 사용할 수 있습니다. 아래는 macOS의 키체인을 사용하는 실행 절차입니다. Python 3.11과 카메라가 필요합니다.
+
+```bash
+npm run local:up
+python3.11 -m venv .local/ai-venv
+.local/ai-venv/bin/python -m pip install -e './ai[dev]'
+export FOCUSLENS_AI_PYTHON="$PWD/.local/ai-venv/bin/python"
+npm run local:ai -- login --email user_a@focuslens.dev
+npm run local:ai -- measure --minutes 2
+```
+
+로그인은 비밀번호를 화면에 표시하지 않는 입력창으로 받습니다. 위 테스트 계정은 `local:seed`를 실행한 환경에만 있으며, 회원가입한 계정도 사용할 수 있습니다. JWT·Refresh Token은 서버 주소와 사용자 UUID에 따라 분리된 macOS 키체인 항목에 저장합니다. 비밀번호는 저장하지 않습니다. `FOCUSLENS_AI_PYTHON` 대신 기존 `AI3_PYTHON`·`AI2_PYTHON` 설정도 사용할 수 있습니다.
+
+측정 시작 후 처음 3초는 정면을 바라보고, 이후에는 평소처럼 화면을 봅니다. `--minutes 2`는 보정 후 실제 60초 구간 두 개를 측정합니다. `--minutes`를 생략하거나 0으로 두면 Ctrl+C까지 계속 측정합니다. 한 분에 유효 표본 480개를 확보하지 못하면 그 구간을 건너뛰고, 미완성 마지막 구간은 보내지 않습니다. 카메라가 한 분 넘게 끊긴 구간을 가짜 표본으로 채우지 않습니다.
+
+완료된 각 분은 HTTP 전송 전에 SQLite에 커밋합니다. 전송은 별도 스레드가 수행하므로 네트워크 재시도 중에도 다음 분을 계속 측정합니다. 기존 눈 감김·시선·자세·가중 점수식은 그대로 사용합니다. 모델은 처음 필요할 때 `.local/ai/models/face_landmarker.task`에 내려받으며 `FOCUSLENS_MODEL_PATH`로 기존 모델 경로를 지정할 수 있습니다. 영상과 프레임별 원문 특징은 파일로 저장하지 않습니다.
+
+```bash
+npm run local:ai -- status
+# 프로세스가 예기치 않게 끝난 측정을 같은 세션에서 계속하려면
+npm run local:ai -- resume --minutes 2
+# 측정을 추가하지 않고 저장된 로그만 보내고 세션을 끝내려면
+npm run local:ai -- finish
+```
+
+정상 측정 완료나 Ctrl+C 후에는 큐를 비우고 세션 종료·리포트 생성을 요청합니다. 전송 실패·재로그인 필요·거절된 로그가 남아 있으면 세션 종료를 보류합니다. 서버 복구 후 필요하면 다시 `login`하고 같은 상태 디렉터리에서 `finish`를 실행합니다. 이미 종료 대기 중인 `resume`은 새 카메라 측정 대신 전송·종료를 마무리합니다. 강제 종료로 저장하지 못한 미완성 분은 재시작 후 복원하지 않으며, 완료 로그의 ID·측정 시각은 재시도 시 유지합니다. 거절된 로그는 자동으로 버리지 않습니다.
+
+기본 API는 `http://127.0.0.1:3000`, 상태·큐 경로는 `.local/ai/<서버주소해시>/`입니다. `.local/`은 Git과 이미지 빌드에서 제외합니다. 같은 디렉터리를 쓰는 동시 실행은 차단합니다. 계정을 바꿀 때는 별도 `--state-dir`를 사용하며, 다른 서버의 큐·토큰은 섞지 않습니다. 다른 포트를 쓰면 모든 명령에 같은 전역 옵션을 전달합니다.
+
+```bash
+npm run local:ai -- --base-url http://127.0.0.1:13000 --state-dir .local/ai-other login --email 사용자이메일
+npm run local:ai -- --base-url http://127.0.0.1:13000 --state-dir .local/ai-other measure --minutes 2
+```
+
+시작 응답이 유실돼 `starting` 상태가 남으면 `resume`은 발견한 세션의 UUID·시작 시각을 출력하고 확인을 요구합니다. 해당 세션이 이 측정에서 시작한 세션인지 확인한 뒤 `resume --confirm-session UUID` 또는 `finish --confirm-session UUID`로 진행합니다. 이미 프런트에서 진행 중인 세션은 새 `measure`가 자동으로 가져오지 않습니다.
+
+실제 전체 경로 재검증은 `npm run verify:local-ai`입니다. 실행 중인 일반 로컬 서버에 검증 계정·세션 하나를 생성하고, 별도 루프백 프록시에서만 로그 전송 중단·응답 유실을 재현합니다. 카메라로 2분을 실제 측정한 뒤 별도 프로세스에서 키체인 인증과 큐를 재사용해 전송·종료하고 DB·리포트를 대조합니다. 원래 DB·Redis 서비스는 중지하지 않습니다. 성공 시 검증용 키체인 항목만 삭제하고, 비밀값을 제외한 증거와 큐를 `.local/ai-verification/`에 보관합니다. 세션 시각을 소급하지 않습니다.
+
+측정은 끝났지만 후속 검증이 중단된 경우 `npm run verify:local-ai -- --resume-evidence .local/ai-verification/기존디렉터리`로 저장된 카메라 결과·큐·키체인 인증을 재사용할 수 있습니다. 원래 루프백 프록시 포트가 비어 있어야 하며, 새 촬영·로그인·계정 생성은 하지 않습니다. 최초 기록은 `initial-evidence.json`에 보존하고 결과는 같은 디렉터리의 `evidence.json`으로 원자 교체합니다. 일반 사용자의 세션 복구는 위 `local:ai resume`·`finish`를 사용합니다.
+
 ### 현재 AI 실행 프로그램 (2026-10-06)
 
 `ai/`에는 Python 3.11 기반 로컬 웹캠 측정 프로그램이 구현돼 있다. OpenCV와 MediaPipe Face Landmarker로 약 10 FPS의 프레임을 처리하며, 얼굴 검출, 홍채 상대 위치, blink blendshape·단일 프레임 눈 감김, yaw/pitch/roll을 출력한다. 디버그 화면과 프레임별 JSON 출력이 가능하다. 진행 상태와 백엔드 연동 선행 조건은 `docs/integration-readiness.md`, 실행 세부 사항은 `ai/README.md`를 참조한다.
@@ -140,13 +182,13 @@ focuslens-ai --print-values
 
 첫 실행 시 Face Landmarker 모델을 `ai/models/face_landmarker.task`로 내려받는다. 미리보기 창은 `q` 또는 `ESC`로 닫는다. `FOCUSLENS_MODEL_PATH`로 모델 경로를 바꿀 수 있다.
 
-현재 `total` 계산 함수와 JWT 로그 API 클라이언트는 구현돼 있지만, 사용자별 보정·blink 이벤트·1분 점수 집계와 웹캠→API 전송 연결은 아직 없다. `FOCUSLENS_API_BASE_URL`, `FOCUSLENS_ACCESS_TOKEN`은 후속 연동용이며 현재 `focuslens-ai` 실행 명령은 이를 사용해 로그를 자동 전송하지 않는다.
+`focuslens-ai` 원래 명령은 프레임별 특징 측정을 수행하고 로그를 자동 전송하지 않는다. 사용자별 보정·blink 이벤트·1분 점수 집계와 웹캠→큐→v2 전송은 위 백엔드의 별도 `local:ai` 도구로 연결한다. 기존 AI의 `FOCUSLENS_API_BASE_URL`, `FOCUSLENS_ACCESS_TOKEN` 환경변수는 이 새 도구의 인증 저장 방식과 구분한다.
 
 1. **AI 추론 결과 저장 테이블 (`concentration_logs`)**
-   - AI의 1분 점수 집계와 자동 전송이 완성되면 결과는 백엔드 API를 거쳐 `concentration_logs` 테이블에 저장된다. 현재 테이블과 수신 API는 구현됐지만 AI 자동 전송은 미연결이다.
+   - 별도 `local:ai` 도구의 1분 점수 집계는 백엔드 API를 거쳐 `concentration_logs`에 저장된다. 기존 `focuslens-ai` 명령 자체는 자동 전송하지 않는다.
    - **제약 조건:** `focus_score`, `gaze_score`, `blink_score`, `head_score`는 모두 `0` 이상 `100` 이하의 Float 값이어야 합니다.
    - **상태 값:** `attention_state` 컬럼은 `FOCUSED`, `NORMAL`, `DISTRACTED` 세 가지 Enum 값만 허용됩니다.
-   - 신규 연동은 `POST /api/v2/sessions/:id/log`에 JWT, `client_log_id`, `measured_at`, 네 점수와 `face_detected`를 보낸다. 백엔드는 원래 측정 시각으로 분 구간을 계산하고 client ID와 분 구간 UNIQUE 제약으로 멱등 저장한다. v1은 기존 클라이언트 호환을 위해 유지한다. 현재 AI 실행 프로그램은 아직 이 요청을 자동으로 보내지 않는다.
+   - 신규 연동은 `POST /api/v2/sessions/:id/log`에 JWT, `client_log_id`, `measured_at`, 네 점수와 `face_detected`를 보낸다. 백엔드는 원래 측정 시각으로 분 구간을 계산하고 client ID와 분 구간 UNIQUE 제약으로 멱등 저장한다. v1은 기존 클라이언트 호환을 위해 유지한다. `local:ai`는 영속 큐에 기록한 같은 요청을 재전송한다.
 
 2. **파생 데이터(통계, 랭킹) 조회 원칙**
    - 평균 집중도, 총 학습 시간 등의 집계 데이터는 기본 테이블에 저장하지 않고 **미리 생성된 View를 통해 조회**합니다. AI 모델 결과 평가나 통계 추출 시 아래 View를 활용해 주세요.

@@ -13,6 +13,7 @@ AGENTS.md
 .env.*.local
 *.auth-recovery.tmp
 .auth-recovery.lock
+.local/
 
 # ── dependencies ──────────────────────────────────────────────────
 node_modules/
