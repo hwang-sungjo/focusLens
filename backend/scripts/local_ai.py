@@ -49,8 +49,9 @@ def atomic_json(file, value):
 
 
 class _Sender:
-    def __init__(self, runtime):
+    def __init__(self, runtime, wait_for_browser_auth=False):
         self.runtime = runtime
+        self.wait_for_browser_auth = wait_for_browser_auth
         self.stop_event = threading.Event()
         self.wake = threading.Event()
         self.thread = threading.Thread(target=self.run, name="focuslens-delivery", daemon=True)
@@ -65,7 +66,7 @@ class _Sender:
                 if status != previous:
                     self.runtime.emit("delivery_status", **result)
                     previous = status
-                if result["status"] == "authentication_required" or result["failed"]:
+                if result["failed"] or (result["status"] == "authentication_required" and not self.wait_for_browser_auth):
                     return
                 failures = failures + 1 if result["pending"] else 0
             except Exception:
@@ -316,10 +317,19 @@ class LocalAIRuntime:
             self._save(phase="measuring")
         else:
             self.start()
+        try:
+            self.capture_session(minutes, camera_index, stop_event, capture)
+        except BaseException:
+            self._save(phase="paused")
+            raise
+        return self.finish()
+
+    def capture_session(self, minutes, camera_index, stop_event, capture=None, wait_for_browser_auth=False):
+        """Capture for the current session. The controller decides whether to pause or finish."""
         if capture is None:
             from local_ai_camera import collect_camera
             capture = collect_camera
-        sender = _Sender(self)
+        sender = _Sender(self, wait_for_browser_auth=wait_for_browser_auth)
         # Open/bind the queue on the caller thread before either producer or sender.
         client = self.client
         sender.start()
@@ -334,12 +344,8 @@ class LocalAIRuntime:
             stats = capture(on_minute, minutes=minutes, camera_index=camera_index,
                             stop_event=stop_event, on_event=self.on_event)
             self.emit("capture_completed", **stats)
-        except BaseException:
-            self._save(phase="paused")
-            raise
         finally:
             sender.stop()
-        return self.finish()
 
 
 def parser():

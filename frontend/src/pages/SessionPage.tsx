@@ -1,13 +1,7 @@
-import { useRef, useState, useEffect } from 'react'
-import { apiFetch, readJson, getErrorMessage } from '../api'
-
-interface FocusResult {
-  focus_score: number
-  attention_state: 'FOCUSED' | 'NORMAL' | 'DISTRACTED'
-  gaze: number
-  blink: number
-  head: number
-}
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { apiFetch, readJson } from '../api'
+import { aiErrorText, controlAi, getAiPreview, getAiStatus } from '../localAi'
+import type { AiAction, AiStatus, MinuteScore } from '../localAi'
 
 // 화면을 벗어나서 서버에 IN_PROGRESS로 남아 있는 세션
 interface PendingSession {
@@ -21,6 +15,11 @@ interface PendingSession {
 const SOUND_STORAGE_KEY = 'focuslens_alert_sound' // 소리 켬/끔을 브라우저에 기억하는 이름
 const GUIDE_DISTRACTED_STREAK = 2 // '집중 이탈'이 이 횟수(1분 단위)만큼 연속되면 팝업
 const GUIDE_COOLDOWN_MS = 10 * 60 * 1000 // 팝업을 띄운 뒤 이 시간 동안은 다시 띄우지 않음 (10분)
+// Keep the development alert preview independent of the measured scores and stored logs.
+function alertState(state: MinuteScore['attention_state']) {
+  return import.meta.env.DEV && new URLSearchParams(window.location.search).has('forceDistracted')
+    ? 'DISTRACTED' : state
+}
 const GUIDE_MESSAGES = [
   '자리에서 일어나 가볍게 스트레칭해 보세요.',
   '물 한 잔 마시고 오면 다시 집중하기 쉬워요.',
@@ -62,7 +61,6 @@ function readSoundSetting(): boolean {
 }
 
 // 팝업을 띄울지 판단. 연속 이탈 횟수와 마지막으로 띄운 시각을 tracker에 기록한다
-// TODO: AI 연동 방식이 정해지면 판정(attention_state)을 받는 위치만 바꾸면 된다. 눈 감지 팝업은 AI 신호가 생기면 추가
 interface GuideTracker {
   streak: number
   lastShownAt: number
@@ -70,7 +68,7 @@ interface GuideTracker {
 
 function shouldShowGuide(
   tracker: GuideTracker,
-  state: FocusResult['attention_state'],
+  state: MinuteScore['attention_state'],
   now: number,
 ): boolean {
   tracker.streak = state === 'DISTRACTED' ? tracker.streak + 1 : 0
@@ -83,135 +81,148 @@ function shouldShowGuide(
 }
 // =========================================================================================
 
-// 진행 중으로 남아 있는 세션이 있는지 서버에 확인 (docs/frontend-api-map.md: 세션 시작 409 처리)
-async function fetchInProgressSession(): Promise<PendingSession | null> {
-  try {
-    const res = await apiFetch('/api/sessions?status=IN_PROGRESS&limit=1')
-    const result = await readJson(res)
-    if (res.ok && result.data.sessions.length > 0) {
-      const s = result.data.sessions[0]
-      return { session_id: s.session_id, started_at: s.started_at }
+// 미리보기는 Python이 측정 중인 카메라의 같은 프레임을 사용한다.
+function CameraPreview() {
+  const [source, setSource] = useState('')
+  useEffect(() => {
+    const controller = new AbortController()
+    let timer: ReturnType<typeof setTimeout>
+    let url = ''
+    async function update() {
+      let frame: Blob | null = null
+      try {
+        frame = await getAiPreview(AbortSignal.any([controller.signal, AbortSignal.timeout(5_000)]))
+      } catch {
+        // 다음 프레임은 다시 요청한다. 연결 상태·권한 오류는 상태 패널에 표시한다.
+      }
+      if (controller.signal.aborted) return
+      const previous = url
+      url = frame ? URL.createObjectURL(frame) : ''
+      setSource(url)
+      if (previous) URL.revokeObjectURL(previous)
+      timer = setTimeout(update, frame ? 250 : 750)
     }
-  } catch (err) {
-    console.error('진행 중 세션 확인 실패:', err)
-  }
-  return null
+    void update()
+    return () => {
+      controller.abort()
+      clearTimeout(timer)
+      if (url) URL.revokeObjectURL(url)
+    }
+  }, [])
+  return source
+    ? <img src={source} alt="웹캠 미리보기" className="w-full aspect-video object-cover rounded-lg" />
+    : <div className="w-full aspect-video rounded-lg bg-bg grid place-items-center text-sm text-secondary">카메라 연결 중...</div>
 }
 
 function SessionPage() {
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const [error, setError] = useState('')
-  const [isStreaming, setIsStreaming] = useState(false)
-
-  const [sessionId, setSessionId] = useState<string | null>(null)
-  const [sessionStatus, setSessionStatus] = useState<'idle' | 'in_progress' | 'completed'>('idle')
-  const [sessionError, setSessionError] = useState('')
-  const [elapsedSeconds, setElapsedSeconds] = useState(0)
+  const [status, setStatus] = useState<AiStatus | null>(null)
+  const observed = useRef<AiStatus | null>(null)
+  const [serverSession, setServerSession] = useState<PendingSession | null>(null)
+  const [bridgeError, setBridgeError] = useState('')
+  const [actionError, setActionError] = useState('')
+  const [busy, setBusy] = useState<AiAction | null>(null)
+  const commandInFlight = useRef(false)
+  const version = useRef(0)
+  const [refresh, setRefresh] = useState(0)
+  const [now, setNow] = useState(() => Date.now())
   const [isCameraVisible, setIsCameraVisible] = useState(true)
-  const [latestResult, setLatestResult] = useState<FocusResult | null>(null)
-  const [showAlert, setShowAlert] = useState(false)
-  const [pendingSession, setPendingSession] = useState<PendingSession | null>(null)
-  const [logError, setLogError] = useState('') // 1분 로그 전송 실패 안내 (세션은 계속 진행)
   const [soundOn, setSoundOn] = useState(readSoundSetting)
-  const soundOnRef = useRef(soundOn) // 1분 타이머 안에서 최신 켬/끔 값을 읽기 위한 사본
-  const [guideMessage, setGuideMessage] = useState<string | null>(null) // 팝업 가이드 문구 (null이면 닫힘)
+  const soundOnRef = useRef(soundOn)
+  const [guideMessage, setGuideMessage] = useState<string | null>(null)
   const guideTrackerRef = useRef<GuideTracker>({ streak: 0, lastShownAt: 0 })
 
-  useEffect(() => {
-    let stream: MediaStream
-
-    const startCamera = async () => {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: true })
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream
-          setIsStreaming(true)
-        }
-      } catch (err) {
-        console.error('웹캠 접근 에러:', err)
-        setError('웹캠 권한이 필요합니다. 브라우저 설정에서 카메라 접근을 허용해주세요.')
+  const applyStatus = useCallback((next: AiStatus) => {
+    const previous = observed.current
+    observed.current = next
+    setStatus(next)
+    setBridgeError('')
+    if (previous && previous.phase !== next.phase) setActionError('')
+    const latest = next.latest
+    if (previous?.session_id !== next.session_id || next.phase === 'ended') {
+      guideTrackerRef.current = { streak: 0, lastShownAt: 0 }
+      setGuideMessage(null)
+    } else if (latest && next.phase === 'measuring' && latest.client_log_id !== previous?.latest?.client_log_id) {
+      if (previous?.latest && Date.parse(latest.measured_at) - Date.parse(previous.latest.measured_at) > 65_000) {
+        guideTrackerRef.current.streak = 0
+      }
+      const state = alertState(latest.attention_state)
+      if (state === 'DISTRACTED' && soundOnRef.current) playAlertSound()
+      if (shouldShowGuide(guideTrackerRef.current, state, Date.now())) {
+        setGuideMessage(GUIDE_MESSAGES[Math.floor(Math.random() * GUIDE_MESSAGES.length)])
       }
     }
-
-    startCamera()
-
-    return () => {
-      stream?.getTracks().forEach((track) => track.stop())
-    }
   }, [])
 
-  // 페이지에 들어올 때 남아 있는 세션이 있는지 한 번 확인
+  // 다음 요청은 이전 요청이 끝난 뒤 보낸다. 버튼을 누르기 전의 늦은 응답은 버린다.
   useEffect(() => {
-    fetchInProgressSession().then((pending) => {
-      if (pending) setPendingSession(pending)
-    })
+    const controller = new AbortController()
+    let timer: ReturnType<typeof setTimeout>
+    async function poll() {
+      const requestVersion = version.current
+      const current = () => !controller.signal.aborted && requestVersion === version.current && !commandInFlight.current
+      let delay = 1200
+      try {
+        const next = await getAiStatus(AbortSignal.any([controller.signal, AbortSignal.timeout(8_000)]))
+        if (current()) applyStatus(next)
+      } catch (error) {
+        delay = 3500
+        if (current()) setBridgeError(error instanceof Error ? error.message : '로컬 AI에 연결할 수 없습니다.')
+      }
+      if (!controller.signal.aborted) timer = setTimeout(poll, delay)
+    }
+    void poll()
+    return () => { controller.abort(); clearTimeout(timer) }
+  }, [applyStatus, refresh])
+
+  const phase = status?.phase ?? 'idle'
+  const checkServerSession = phase === 'idle' || phase === 'starting' || phase === 'ended'
+  // 다른 도구의 진행 세션과 응답이 유실된 시작 요청을 식별한다. 변경 권한은 AI가 확인한다.
+  useEffect(() => {
+    if (!checkServerSession) return
+    const controller = new AbortController()
+    let timer: ReturnType<typeof setTimeout>
+    async function query() {
+      try {
+        const res = await apiFetch('/api/sessions?status=IN_PROGRESS&limit=1', { signal: controller.signal })
+        const result = await readJson(res)
+        if (res.ok && !controller.signal.aborted) setServerSession(result.data.sessions[0] ?? null)
+      } catch {
+        // 세션 소유·기록 상태를 확인하지 못해도 브라우저가 직접 종료하지 않는다.
+      }
+      if (!controller.signal.aborted) timer = setTimeout(query, 12_000)
+    }
+    void query()
+    return () => { controller.abort(); clearTimeout(timer) }
+  }, [refresh, checkServerSession])
+
+  useEffect(() => {
+    const currentUser = localStorage.getItem('user_id')
+    function onStorage() {
+      if (localStorage.getItem('user_id') !== currentUser) window.location.reload()
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
   }, [])
+
+  const measuring = phase === 'measuring'
+  const sessionStatus = phase === 'ended' ? 'completed' : measuring || phase === 'closing' ? 'in_progress' : 'idle'
+  const latestResult = status?.latest
+  const showAlert = measuring && latestResult && alertState(latestResult.attention_state) === 'DISTRACTED'
+  const uncertainStart = phase === 'starting' && !!status?.error
+  const pendingSession = phase === 'paused' && status?.session_id && status.started_at
+    ? { session_id: status.session_id, started_at: status.started_at }
+    : uncertainStart ? serverSession : null
+  const externalSession = serverSession && (phase === 'idle' || phase === 'ended') &&
+    serverSession.session_id !== status?.session_id
+  const elapsedSeconds = status?.started_at
+    ? Math.max(0, Math.floor((now - Date.parse(status.started_at)) / 1000)) : 0
+  const statusMessage = actionError || bridgeError || (status?.error ? aiErrorText(status.error) : '')
 
   useEffect(() => {
     if (sessionStatus !== 'in_progress') return
-
-    const interval = setInterval(() => {
-      setElapsedSeconds((prev) => prev + 1)
-    }, 1000)
-
+    const interval = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(interval)
   }, [sessionStatus])
-
-  // MediaPipe 연동 후 더미 값을 실제 gaze/blink/head/total 점수로 교체
-  useEffect(() => {
-    if (sessionStatus !== 'in_progress' || !sessionId) return
-
-    const sendDummyLog = async () => {
-      const round2 = (v: number) => Math.round(v * 100) / 100
-      // 개발용: 주소 끝에 ?forceDistracted 를 붙이면 항상 낮은 점수를 보내 알림·팝업을 확인할 수 있다
-      // (import.meta.env.DEV는 npm run dev에서만 true → 배포 빌드에서는 동작하지 않음)
-      const forceLow =
-        import.meta.env.DEV && new URLSearchParams(window.location.search).has('forceDistracted')
-      const max = forceLow ? 30 : 100
-      const gaze = round2(Math.random() * max)
-      const blink = round2(Math.random() * max)
-      const head = round2(Math.random() * max)
-      const total = round2(gaze * 0.3 + blink * 0.5 + head * 0.2)
-
-      try {
-        const res = await apiFetch(`/api/sessions/${sessionId}/log`, {
-          method: 'POST',
-          body: JSON.stringify({ gaze, blink, head, total, face_detected: true }),
-        })
-        const result = await readJson(res)
-        const time = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
-        if (!res.ok) {
-          setLogError(`${time} 기록 전송 실패: ${getErrorMessage(res, result, '알 수 없는 오류')}`)
-          return
-        }
-        setLogError('')
-        setLatestResult({
-          focus_score: result.data.focus_score,
-          attention_state: result.data.attention_state,
-          gaze,
-          blink,
-          head,
-        })
-        const state: FocusResult['attention_state'] = result.data.attention_state
-        setShowAlert(state === 'DISTRACTED')
-
-        // B6: 집중 이탈이면 소리 (켜 둔 경우). 진동은 안드로이드에서만 지원돼 제외함
-        if (state === 'DISTRACTED' && soundOnRef.current) playAlertSound()
-
-        // B7: 이탈이 연속되면 팝업 가이드
-        if (shouldShowGuide(guideTrackerRef.current, state, Date.now())) {
-          setGuideMessage(GUIDE_MESSAGES[Math.floor(Math.random() * GUIDE_MESSAGES.length)])
-        }
-      } catch (err) {
-        console.error('로그 전송 실패:', err)
-        const time = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
-        setLogError(`${time} 기록 전송 실패: 서버에 연결할 수 없습니다.`)
-      }
-    }
-
-    const logInterval = setInterval(sendDummyLog, 60000)
-    return () => clearInterval(logInterval)
-  }, [sessionStatus, sessionId])
 
   const formatTime = (totalSeconds: number) => {
     const minutes = Math.floor(totalSeconds / 60)
@@ -219,11 +230,24 @@ function SessionPage() {
     return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
   }
 
-  // 새 세션 시작·이어하기 때: 팝업 기록 초기화, 소리 준비 (버튼 클릭 순간이라 브라우저가 소리를 허용함)
-  const resetAlerts = () => {
-    guideTrackerRef.current = { streak: 0, lastShownAt: 0 }
-    setGuideMessage(null)
-    unlockAlertSound()
+  async function act(action: AiAction, id: string | null = null) {
+    if (commandInFlight.current) return
+    commandInFlight.current = true
+    version.current++
+    setBusy(action)
+    setActionError('')
+    if (action !== 'finish') unlockAlertSound()
+    try {
+      const next = await controlAi(action, id)
+      applyStatus(next)
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : '로컬 AI 요청에 실패했습니다.')
+    } finally {
+      version.current++
+      commandInFlight.current = false
+      setBusy(null)
+      setRefresh(n => n + 1)
+    }
   }
 
   // 🔔 버튼: 켬/끔을 바꾸고 브라우저에 기억. 켤 때는 미리 들어 볼 수 있게 한 번 울린다
@@ -242,106 +266,10 @@ function SessionPage() {
     }
   }
 
-  const handleStartSession = async () => {
-    setSessionError('')
-
-    try {
-      const res = await apiFetch('/api/sessions/start', {
-        method: 'POST',
-        body: JSON.stringify({}),
-      })
-
-      const result = await readJson(res)
-
-      if (res.status === 409) {
-        // 다른 탭 등에서 시작된 세션이 남아 있는 경우 → 이어하기/종료 안내를 띄운다
-        const pending = await fetchInProgressSession()
-        if (pending) setPendingSession(pending)
-        setSessionError('이미 진행 중인 세션이 있습니다. 아래에서 이어하거나 종료해 주세요.')
-        return
-      }
-
-      if (!res.ok) {
-        setSessionError(getErrorMessage(res, result, '세션 시작에 실패했습니다.'))
-        return
-      }
-
-      setSessionId(result.data.session_id)
-      setSessionStatus('in_progress')
-      setElapsedSeconds(0)
-      setLatestResult(null)
-      setShowAlert(false)
-      setLogError('')
-      resetAlerts()
-    } catch {
-      setSessionError('서버에 연결할 수 없습니다.')
-    }
-  }
-
-  // 남아 있던 세션을 이어서 진행: 시작 시각 기준으로 타이머를 맞춘다
-  const handleResumeSession = () => {
-    if (!pendingSession) return
-    const elapsed = Math.floor((Date.now() - new Date(pendingSession.started_at).getTime()) / 1000)
-    setSessionId(pendingSession.session_id)
-    setElapsedSeconds(Math.max(0, elapsed))
-    setSessionStatus('in_progress')
-    setLatestResult(null)
-    setShowAlert(false)
-    setSessionError('')
-    setLogError('')
-    setPendingSession(null)
-    resetAlerts()
-  }
-
-  // 남아 있던 세션을 종료: 이후 새 세션을 시작할 수 있다
-  const handleEndPendingSession = async () => {
-    if (!pendingSession) return
-    setSessionError('')
-
-    try {
-      const res = await apiFetch(`/api/sessions/${pendingSession.session_id}/end`, { method: 'POST' })
-      const result = await readJson(res)
-
-      // 409(이미 종료됨)도 남은 세션이 없다는 뜻이므로 정리하고 넘어간다
-      if (!res.ok && res.status !== 409) {
-        setSessionError(getErrorMessage(res, result, '이전 세션 종료에 실패했습니다.'))
-        return
-      }
-
-      setPendingSession(null)
-      setSessionStatus('idle')
-    } catch {
-      setSessionError('서버에 연결할 수 없습니다.')
-    }
-  }
-
-  const handleEndSession = async () => {
-    if (!sessionId) return
-    setSessionError('')
-
-    try {
-      const res = await apiFetch(`/api/sessions/${sessionId}/end`, { method: 'POST' })
-
-      const result = await readJson(res)
-
-      if (!res.ok) {
-        setSessionError(getErrorMessage(res, result, '세션 종료에 실패했습니다.'))
-        return
-      }
-
-      setSessionStatus('completed')
-      setShowAlert(false)
-      setLogError('')
-      setGuideMessage(null)
-    } catch {
-      setSessionError('서버에 연결할 수 없습니다.')
-    }
-  }
-
-  const attentionLabel = (state: FocusResult['attention_state']) =>
+  const attentionLabel = (state: MinuteScore['attention_state']) =>
     state === 'FOCUSED' ? '집중 상태' : state === 'NORMAL' ? '보통' : '집중 이탈'
 
-  const attentionStyle = (state: FocusResult['attention_state']) =>
+  const attentionStyle = (state: MinuteScore['attention_state']) =>
     state === 'FOCUSED'
       ? 'bg-green-100 text-green-700'
       : state === 'NORMAL'
@@ -352,36 +280,27 @@ function SessionPage() {
     <div className="min-h-screen bg-bg p-6">
       <h1 className="text-2xl font-bold text-primary mb-4">학습 세션</h1>
 
-      {error && <p className="text-red-600 text-sm mb-4">{error}</p>}
-      {sessionError && <p className="text-red-600 text-sm mb-4">{sessionError}</p>}
+      {statusMessage && <p role="status" className="text-red-600 text-sm mb-4">{statusMessage}</p>}
+      {externalSession && (
+        <p className="text-sm text-secondary mb-4">진행 중인 세션이 있습니다. 측정을 시작한 도구에서 상태를 확인해 주세요.</p>
+      )}
 
-      {/* 기획서 6.3절 (3): 좌측 2/3 웹캠, 우측 1/3 실시간 패널. 좁은 화면에서는 위아래로 쌓인다 */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 max-w-6xl">
-        {/* 좌측: 웹캠 */}
         <div className="lg:col-span-2 bg-surface rounded-xl shadow-md p-4">
-          {/* video는 숨겨도 화면에서 빼지 않는다 (나중에 분석이 연결되면 계속 동작해야 함) */}
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            className={`w-full aspect-video rounded-lg bg-black object-cover ${
-              isCameraVisible ? '' : 'hidden'
-            }`}
-          />
-          {!isCameraVisible && (
-            <div className="w-full aspect-video rounded-lg bg-bg flex items-center justify-center text-sm text-secondary">
-              웹캠 화면이 숨겨져 있어요. 세션은 계속 진행됩니다.
-            </div>
-          )}
+          {isCameraVisible && measuring && !bridgeError
+            ? <CameraPreview key={status?.session_id} />
+            : <div className="w-full aspect-video rounded-lg bg-bg flex items-center justify-center text-sm text-secondary">
+                {!isCameraVisible
+                  ? (measuring ? '웹캠 화면이 숨겨져 있어요. 세션은 계속 진행됩니다.' : '웹캠 화면이 숨겨져 있어요.')
+                  : measuring ? '미리보기 연결을 기다리고 있습니다.' : '측정을 시작하면 이 컴퓨터의 카메라가 켜집니다.'}
+              </div>}
           <div className="flex items-center justify-between mt-2">
             <p className="text-sm text-secondary">
-              {isStreaming ? '웹캠 연결됨' : '웹캠 연결 대기 중...'}
+              {measuring ? (status?.stage === 'calibrating' ? '보정 중 · 처음 3초 동안 화면 중앙을 바라봐 주세요.' : 'AI 측정 중')
+                : phase === 'closing' ? '기록 전송 및 종료 확인 중' : '웹캠 연결 대기 중...'}
             </p>
-            <button
-              onClick={() => setIsCameraVisible((prev) => !prev)}
-              className="text-sm text-secondary underline"
-            >
+            <button onClick={() => setIsCameraVisible(prev => !prev)}
+              aria-pressed={isCameraVisible} className="text-sm text-secondary underline">
               {isCameraVisible ? '웹캠 숨기기' : '웹캠 보이기'}
             </button>
           </div>
@@ -406,7 +325,9 @@ function SessionPage() {
           >
             {formatTime(sessionStatus === 'in_progress' ? elapsedSeconds : 0)}
           </p>
-          {logError && <p className="text-sm text-red-600 mt-1">{logError}</p>}
+          {(status?.pending || status?.failed) ? (
+            <p className="text-sm text-secondary mt-1">전송 대기 {status?.pending}건 · 전송 실패 {status?.failed}건</p>
+          ) : null}
 
           <p className="text-sm text-secondary mt-5">집중도</p>
           <div className="flex items-center gap-3">
@@ -426,7 +347,7 @@ function SessionPage() {
             )}
           </div>
           {sessionStatus === 'in_progress' && !latestResult && (
-            <p className="text-xs text-secondary mt-1">첫 점수는 세션 시작 1분 뒤에 표시돼요.</p>
+            <p className="text-xs text-secondary mt-1">첫 점수는 카메라 보정 후 1분을 측정하면 표시돼요.</p>
           )}
 
           {/* Gaze/Blink/Head 미니 게이지 */}
@@ -468,13 +389,15 @@ function SessionPage() {
               </p>
               <div className="flex gap-3 mt-3">
                 <button
-                  onClick={handleResumeSession}
+                  disabled={!!busy}
+                  onClick={() => void act('resume', pendingSession.session_id)}
                   className="bg-primary text-white rounded-lg px-4 py-2 hover:bg-secondary transition-colors"
                 >
                   이어하기
                 </button>
                 <button
-                  onClick={handleEndPendingSession}
+                  disabled={!!busy}
+                  onClick={() => void act('finish', pendingSession.session_id)}
                   className="bg-red-600 text-white rounded-lg px-4 py-2 hover:bg-red-700 transition-colors"
                 >
                   종료하기
@@ -485,21 +408,24 @@ function SessionPage() {
 
           {/* 하단 버튼: 패널 맨 아래에 붙인다 (일시정지는 백엔드 미지원으로 제외) */}
           <div className="mt-auto pt-5">
-            {(sessionStatus === 'idle' || sessionStatus === 'completed') && !pendingSession && (
+            {(phase === 'idle' || phase === 'ended' || uncertainStart) && !pendingSession && !externalSession && (
               <button
-                onClick={handleStartSession}
+                disabled={!!busy || !status || !!bridgeError}
+                onClick={() => void act('start')}
                 className="w-full bg-primary text-white rounded-lg px-4 py-2 hover:bg-secondary transition-colors"
               >
                 세션 시작
               </button>
             )}
 
+            {phase === 'starting' && !uncertainStart && <p className="text-sm text-secondary">세션 시작 확인 중...</p>}
             {sessionStatus === 'in_progress' && (
               <button
-                onClick={handleEndSession}
+                disabled={!!busy || !status?.session_id}
+                onClick={() => void act('finish', status?.session_id ?? null)}
                 className="w-full bg-red-600 text-white rounded-lg px-4 py-2 hover:bg-red-700 transition-colors"
               >
-                세션 종료
+                {phase === 'closing' ? '종료하기' : '세션 종료'}
               </button>
             )}
 

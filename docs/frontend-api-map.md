@@ -1,7 +1,7 @@
 # FocusLens 프런트엔드 API 매핑
 
 > 작성일: 2026-10-06  
-> FE-2에서 Chromium과 실제 로컬 API로 11개 화면을 검증했다. 다음 단계는 FE-3 세션 화면과 AI 실측 연결이다. [검증 범위](integration-readiness.md)
+> FE-2에서 Chromium과 실제 로컬 API로 11개 화면을 검증했다. FE-3에서 세션 화면에 로컬 AI 측정·종료를 연결했다. 다음은 FE-4 전체 흐름 검증이다. [검증 범위](integration-readiness.md)
 > API 상세: `docs/api-spec.md`, 실행 명세: `docs/swagger.yaml`
 > 최신 로컬 실행·현재 화면 동작·검증 범위: [프런트 인계](frontend-handoff.md). 아래 표는 API 계약이며, 회원가입 후 로그인 화면으로 이동하는 현재 UX는 유지한다.
 
@@ -13,8 +13,9 @@
 | 로그인 | `POST /api/auth/login` | 1시간 Access Token 사용, 30일 Refresh cookie 수신 |
 | 토큰 갱신 | `POST /api/auth/refresh` | 1회 회전 후 원 요청 1회 재시도 |
 | 로그아웃 | `POST /api/auth/logout` | 로컬 토큰 제거, Access 블랙리스트와 Refresh family 폐기 |
-| 세션 시작 | `POST /api/sessions/start` | 중복 진행 세션 409 처리 |
-| 세션 종료 | `POST /api/sessions/:id/end` | 종료 summary와 report ID 표시 |
+| 세션 시작·이어하기 | 로컬 AI `POST /start`, `POST /resume` | 시작 시 Python이 Express 세션을 연다. 이어하기는 화면에 표시된 본인 세션 UUID를 보낸다. |
+| 실측 상태·미리보기 | 로컬 AI `GET /status`, `GET /preview` | 최근 1분 점수·판정·대기 건수와 같은 카메라의 JPEG를 표시한다. 프레임이 준비되기 전에는 204다. |
+| 세션 종료 | 로컬 AI `POST /finish` | 세션 UUID를 확인하고 대기 중인 v2 로그 전송 후 Python이 Express 종료 API를 호출한다. |
 | 내 세션 | `GET /api/sessions` | `page`, `limit`, `status`, 최대 100건 |
 | 세션 상세 | `GET /api/sessions/:id` | MINUTE/HOUR/DAY/WEEK 타임라인 지원 |
 | 세션 리포트 | `GET /api/reports/:session_id` | summary와 타임라인 |
@@ -36,7 +37,7 @@
 ## 2. 공통 클라이언트 규칙
 
 - 모든 보호 API에 `Authorization: Bearer <access_token>`을 보낸다.
-- 모든 응답의 `{ success, data, error }` envelope를 확인한다.
+- JSON 응답은 `{ success, data, error }`를 확인한다. 로컬 AI 미리보기 성공 응답은 JPEG 또는 204다.
 - 응답 `X-Request-ID`를 오류 화면·고객 지원 로그에 함께 남긴다.
 - 목록 기본값은 `page=1`, `limit=20`이고 최대 100이다.
 - 같은 생성 시각의 데이터도 서버 정렬 순서를 그대로 유지한다.
@@ -61,4 +62,4 @@
 - 토큰, 비밀번호, Refresh Token을 콘솔·분석 이벤트·오류 리포트에 기록하지 않는다.
 - 프라이버시로 마스킹된 필드를 다른 API 결과와 결합해 복원하지 않는다.
 - 그룹 관리 버튼은 역할에 따라 숨기되 서버 403을 최종 권한 판단으로 사용한다.
-- 웹 클라이언트는 Access Token을 localStorage에 보관하고 Refresh Token은 HttpOnly 쿠키로 전송한다. 운영 CORS origin은 배포 주소가 정해질 때 확정한다.
+- 웹 클라이언트는 Access Token을 localStorage에 보관하고 Refresh Token은 HttpOnly 쿠키로 전송한다. 로컬 AI는 설정된 루프백 주소에서 Bearer만 받으며 쿠키 갱신은 Express API에 보낸다. 운영 CORS origin은 배포 주소가 정해질 때 확정한다.

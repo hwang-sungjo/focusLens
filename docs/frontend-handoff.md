@@ -1,10 +1,10 @@
 # FocusLens 로컬 프런트 인계
 
-> 기준일: 2026-11-26 · FE-2 브라우저 검증 완료
+> 기준일: 2026-11-26 · FE-3 로컬 AI 세션 연결
 > API 상세: [API 명세](api-spec.md), [화면별 매핑](frontend-api-map.md)
 > 전체 진행: [백엔드 계획](backend-plan.md), AI 실행: [로컬 실행 가이드](setting-guide.md)
 
-FE-1에서 로컬 백엔드·AI 측정 도구와 프런트 11개 화면을 `main`에 모았고, FE-2에서 Chromium으로 기존 화면과 실제 API의 연동을 확인했다. 다음 단계인 FE-3은 기존 세션 화면에 AI 실측값과 측정 상태를 연결하는 작업이다.
+FE-1에서 로컬 백엔드·AI 측정 도구와 프런트 11개 화면을 `main`에 모았고, FE-2에서 Chromium으로 기존 화면과 실제 API의 연동을 확인했다. FE-3에서 기존 세션 버튼을 로컬 AI에 연결했다. FE-4에서 카메라 실측·연결 복구·리포트까지 전체 흐름을 검증한다.
 
 ## 1. 실행 주소와 명령
 
@@ -24,6 +24,7 @@ npm --prefix frontend run dev -- --host localhost --port 5173 --strictPort
 | --- | --- |
 | 프런트 | `http://localhost:5173` |
 | API | `http://localhost:3000` |
+| 로컬 AI | `http://127.0.0.1:4317` (`VITE_LOCAL_AI_ORIGIN`) |
 | Swagger | `http://localhost:3000/api-docs/` |
 | Health | `http://localhost:3000/health` — DB·Redis 정상 시 200 |
 | 프런트 API 설정 | `frontend/.env.development`의 `VITE_API_BASE_URL=http://localhost:3000`; 없으면 같은 기본값 |
@@ -48,7 +49,7 @@ npm --prefix frontend run dev -- --host localhost --port 5173 --strictPort
 
 ## 3. 인증과 오류 계약
 
-프런트 `src/api.ts`는 Access Token을 `localStorage`에 저장하고 `Authorization: Bearer`로 보낸다. 요청에는 `credentials: 'include'`를 사용한다. 로컬 Refresh 쿠키는 `HttpOnly`, `SameSite=Lax`, host-only, `Path=/api/auth`이며 HTTP 로컬 환경에서는 Secure를 요구하지 않는다. Refresh Token을 프런트 저장소에 복사하지 않는다.
+프런트 `src/api.ts`는 Access Token을 `localStorage`에 저장하고 `Authorization: Bearer`로 보낸다. Express 요청에는 `credentials: 'include'`를 사용한다. 로컬 AI에는 Bearer만 보내며 쿠키 갱신은 Express가 처리한다. 로컬 Refresh 쿠키는 `HttpOnly`, `SameSite=Lax`, host-only, `Path=/api/auth`이며 HTTP 로컬 환경에서는 Secure를 요구하지 않는다. Refresh Token을 프런트 저장소에 복사하지 않는다.
 
 보호 요청이 401이면 쿠키로 Refresh를 한 번 시도한다. 동시에 갱신이 필요한 요청은 같은 Promise를 공유하고, 새 Access Token을 받으면 각 원래 요청을 한 번 재시도한다. 로그인·가입·로그아웃 요청은 자동 갱신을 건너뛴다. 회원가입 성공 후에는 로그인 화면으로 이동한다.
 
@@ -84,18 +85,30 @@ Refresh가 429를 제외한 4xx를 반환하면 저장한 인증 정보를 지�
 
 `avg_focus_score`, `duration_seconds` 등의 `null`은 0으로 변환하지 않는다. 무기록과 비공개를 다른 API를 조합해 복원하지 않는다. 그룹 관리 버튼의 표시 여부와 관계없이 서버의 403을 최종 판단으로 삼는다. 그룹 생성자 ID 또는 전역 ADMIN만으로 권한을 추론하지 않는다.
 
-## 5. AI 도구와 세션 화면의 현재 경계
+## 5. 세션 화면에서 카메라 측정하기
 
-`SessionPage.tsx`는 현재 임의 점수를 60초마다 v1 API로 보낸다. 가중치는 `gaze × 0.3 + blink × 0.5 + head × 0.2`이며 실제 AI 분석 결과가 아니다. 브라우저 카메라는 화면 미리보기로만 사용한다. `local:ai`는 Python 카메라·보정·실제 집계와 영속 큐를 사용해 v2로 전송한다.
+백엔드와 Vite를 실행한 상태에서 별도 터미널을 열고 저장소 루트에서 아래 명령을 실행한다. 처음 한 번은 Python 3.11 가상환경에 AI 패키지를 설치한다.
 
-**같은 계정에서 `local:ai` 측정 중 프런트 세션의 이어하기·종료하기를 실행하지 않는다.** 이어하기는 같은 세션에 더미 v1 로그를 섞어 분 구간 409를 일으킬 수 있고, 프런트 종료는 CLI 미전송 큐가 비워지기 전에 세션을 닫을 수 있다. 프런트 카메라와 Python 카메라를 동시에 열지 않는다. AI 도구에서 전송·종료를 마친 뒤 같은 계정의 리포트·대시보드에서 결과를 조회한다.
+```bash
+python3.11 -m venv .local/ai-venv
+.local/ai-venv/bin/python -m pip install -e ./ai
+export FOCUSLENS_AI_PYTHON="$PWD/.local/ai-venv/bin/python"
+npm run local:ai:web
+```
 
-| 다음 작업 | 완료 기준 |
-| --- | --- |
-| FE-3 실제 AI 연결 | 기존 세션 버튼과 알림에 AI 측정 상태와 점수를 연결한다. 카메라와 로그 전송을 한 곳에서 제어하고 대기 로그가 전송된 뒤 세션을 종료한다. |
-| FE-4 전체 흐름 검증 | 브라우저에서 로그인 → 실측 → 전송 중단·복구 → 종료 → 리포트까지 확인한다. 화면·DB·리포트 점수 일치와 반응형·접근성·출력 이스케이프를 점검한다. |
+처음 측정할 때 Face Landmarker 모델을 `.local/ai/models/face_landmarker.task`에 준비한다. 기존 모델을 사용하려면 실행 전에 `FOCUSLENS_MODEL_PATH`에 해당 파일 경로를 지정한다. macOS에서 카메라 권한을 요청하면 Python을 실행한 앱에 허용한다. 주소를 바꾼 환경은 `--base-url`에 로컬 API 주소, `--frontend-origin`에 실제 프런트 주소를 넘긴다. AI 포트를 바꾸면 `--port`와 `VITE_LOCAL_AI_ORIGIN`을 함께 변경한다.
+
+1. 브라우저에서 로그인하고 **학습 세션 → 세션 시작**을 누른다. Python이 컴퓨터의 카메라를 열면 처음 3초 동안 화면 중앙을 바라본다. 웹캠 숨기기는 화면의 미리보기만 끈다.
+2. 보정 후 유효한 1분 측정이 끝나면 점수·판정과 Gaze/Blink/Head가 표시된다. Python이 각 분을 SQLite에 저장한 뒤 v2로 전송한다. 소리와 연속 이탈 안내는 새 분의 판정을 받을 때 동작한다.
+3. **세션 종료**를 누르면 미전송 기록까지 전송한 뒤 세션을 닫는다. 연결 문제로 종료가 보류되면 같은 계정과 서버로 돌아와 **종료하기**를 다시 누른다. 리포트에서 완료된 세션을 확인한다.
+
+마지막으로 인증된 세션 화면의 상태 요청이 끊기고 약 90초가 지나면 카메라 측정을 멈추고 큐와 세션을 보존한다. 화면을 다시 열었을 때 측정이 계속 진행 중이면 자동으로 표시된다. 중단됐으면 **이어하기** 또는 **종료하기**를 선택한다. 시작 응답만 유실된 경우에는 서버의 진행 세션 시각을 확인한 뒤 선택한다. CLI나 이전 클라이언트에서 시작한 세션이면 원래 도구에서 마무리한다. CLI는 해당 서버·계정·상태 디렉터리의 `local:ai -- finish`로 큐를 먼저 전송한다.
 
 ## 6. 재검증
+
+### FE-3 카메라·세션 화면 검증
+
+Docker, 프런트 및 루트 npm 의존성, Chromium과 위의 Python 환경을 준비한다. `npm run verify:fe3`는 테스트 특징 입력으로 카메라 중단·이어하기와 점수 전달을 반복 검증한다. `npm run verify:fe3 -- --live`는 물리 카메라를 열어 실제 1분을 측정하므로 정면에서 보정할 준비가 됐을 때 실행한다. 두 명령은 격리된 API·DB와 임시 계정을 쓴다. 2026-11-26 실측에서는 99.11점과 종료 리포트가 일치했다. [검증 기록](backend-plan.md)
 
 ### FE-2 실제 브라우저 검증
 
@@ -116,7 +129,7 @@ npm run verify:fe2
 | 리포트·피드·친구·랭킹 | 테스트 세션을 시작해 실제 60초 경과 후 LBE-4 첫 분의 카메라 집계값 99.23점과 얼굴 미검출 테스트값 0점을 각각 v2로 전송했다. 대시보드와 리포트에서 각 점수를 확인했다. 공개 공유의 점수와 시간을 각각 가릴 때 API의 `null`과 피드의 ‘비공개’가 일치했고, 공유 범위를 비공개로 줄이자 다른 계정의 피드에서 사라졌다. 친구 요청·수락과 랭킹 점수도 확인했다. |
 | 그룹 목록·상세 | 비공개 그룹 생성·초대·가입, OWNER·MANAGER·MEMBER의 조회 범위와 버튼을 확인했다. MANAGER가 보낸 피드백과 만든 목표가 MEMBER에게 읽기 전용으로 표시됐다. 비구성원 목록에 그룹이 숨겨졌으며 상세 주소로 접근하면 실제 403과 권한 안내가 표시됐다. |
 
-이번 검증의 점수는 기존 실측 집계값과 고정 입력의 재생 결과다. 세션 화면에서 새 카메라 측정을 제어하고 종료 리포트까지 확인하는 과정은 FE-3·4에서 진행한다.
+이번 검증의 점수는 기존 실측 집계값과 고정 입력의 재생 결과다. FE-3 세션 제어 검증은 격리된 브라우저에서 `npm run verify:fe3`로 실행한다. FE-4에서는 실제 측정 중의 연결 복구까지 확인한다.
 
 ### 백엔드 인계 및 빌드 검증
 

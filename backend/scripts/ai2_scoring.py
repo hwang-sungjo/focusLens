@@ -56,6 +56,10 @@ def closure_ratio_penalty(closed_ms, window_ms=60_000):
     return max(0, (closed_ms * 100 - window_ms * 15) // window_ms)
 
 
+class InsufficientCalibrationSamples(ValueError):
+    pass
+
+
 class Calibration:
     def __init__(self):
         self.start_ms = None
@@ -76,7 +80,7 @@ class Calibration:
         if self.start_ms is None or self.last_ms - self.start_ms < 3_000:
             raise ValueError("calibration requires 3 seconds")
         if len(self.frames) < 20:
-            raise ValueError("calibration requires at least 20 valid face samples")
+            raise InsufficientCalibrationSamples("calibration requires at least 20 valid face samples")
         return CalibrationBaseline(**{
             name: sum(getattr(frame, name) for frame in self.frames) / len(self.frames)
             for name in BASELINE_FIELDS

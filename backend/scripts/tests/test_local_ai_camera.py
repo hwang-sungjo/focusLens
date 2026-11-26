@@ -1,12 +1,15 @@
 import sys
+import tempfile
 import threading
 import unittest
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from local_ai_camera import ContinuousMinutes, collect_camera
+from local_ai import LocalAIError
+from local_ai_camera import ContinuousMinutes, _camera_lease, _PreviewRunner, collect_camera
 from focuslens_ai.models import FrameMeasurement
 
 
@@ -22,6 +25,63 @@ def calibrated(on_minute, on_event=lambda _event: None, **options):
 
 
 class ContinuousCameraTests(unittest.TestCase):
+    def test_browser_retries_a_fresh_three_second_window_until_enough_faces(self):
+        events = []
+        collector = ContinuousMinutes(0, self.fail, events.append, retry_calibration=True)
+        for ms in range(0, 6101, 100):
+            collector.observe(frame(ms, face_detected=ms >= 3000))
+        self.assertEqual(events[:2], [{"event": "calibration_retry", "samples": 0},
+                                      {"event": "calibration_completed", "samples": 30}])
+        self.assertEqual(collector.minute.start_ms, 6100)
+
+    def test_cli_still_rejects_the_first_insufficient_window(self):
+        collector = ContinuousMinutes(0, self.fail)
+        with self.assertRaisesRegex(ValueError, "20 valid face samples"):
+            for ms in range(0, 3001, 100):
+                collector.observe(frame(ms, face_detected=False))
+
+    def test_browser_reports_model_and_device_errors_without_private_diagnostics(self):
+        with tempfile.TemporaryDirectory() as tmp, patch("local_ai_camera.AI_ROOT", Path(tmp) / "ai"), \
+                patch("focuslens_ai.model_store.ensure_model") as model, \
+                patch("focuslens_ai.mediapipe_runner.FaceLandmarkerRunner"), \
+                patch("focuslens_ai.camera.WebcamPipeline") as pipeline:
+            model.side_effect = OSError("private model path")
+            with self.assertRaisesRegex(LocalAIError, "^model_unavailable$"):
+                collect_camera(self.fail, on_preview=self.fail)
+            model.side_effect = None
+            for message, code in [("카메라 0번을 열 수 없습니다.", "camera_open_failed"),
+                                  ("웹캠 프레임을 읽지 못했습니다.", "camera_read_failed")]:
+                pipeline.return_value.run.side_effect = RuntimeError(message)
+                with self.assertRaisesRegex(LocalAIError, f"^{code}$"):
+                    collect_camera(self.fail, on_preview=self.fail)
+
+    def test_cli_and_web_capture_cannot_acquire_the_same_camera(self):
+        with tempfile.TemporaryDirectory() as tmp, patch("local_ai_camera.AI_ROOT", Path(tmp) / "ai"):
+            with _camera_lease(0):
+                with self.assertRaisesRegex(LocalAIError, "camera_in_use"), _camera_lease(0):
+                    self.fail("Camera should be exclusive")
+                with _camera_lease(1):
+                    pass
+            with _camera_lease(0):
+                pass
+
+    def test_preview_samples_the_same_inference_frames_as_small_jpegs(self):
+        import cv2
+        import numpy as np
+
+        runner = Mock()
+        image = np.zeros((480, 640, 3), dtype=np.uint8)
+        previews = []
+        adapter = _PreviewRunner(runner, previews.append)
+        for ms in (1000, 1100, 1200):
+            self.assertIs(adapter.detect(image, ms), runner.detect.return_value)
+            self.assertIs(runner.detect.call_args.args[0], image)
+        self.assertEqual(runner.detect.call_count, 3)
+        self.assertEqual(len(previews), 2)
+        for jpeg in previews:
+            frame = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+            self.assertEqual(frame.shape[:2], (360, 480))
+
     def test_two_complete_minutes_share_boundary_frame_without_clock_backdating(self):
         results = []
         collector = calibrated(results.append, minutes=2)

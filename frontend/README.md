@@ -2,7 +2,7 @@
 
 React와 TypeScript로 만든 FocusLens 웹 화면입니다. 백엔드 API(`backend/`)에 연결해 로그인, 학습 세션, 대시보드, 리포트, 프로필, 소셜(피드·랭킹·친구), 그룹 화면을 제공합니다.
 
-> FE-2에서 `main`의 11개 화면을 실제 로컬 API와 연결해 검증했습니다. 다음 단계인 FE-3에서 세션 화면에 실시간 AI 측정을 연결합니다. [로컬 실행·인계 절차](../docs/frontend-handoff.md)
+> FE-2에서 `main`의 11개 화면을 실제 로컬 API와 연결해 검증했습니다. FE-3에서 세션 화면에 로컬 AI 측정을 연결했습니다. 다음 단계는 FE-4 전체 흐름 검증입니다. [로컬 실행·인계 절차](../docs/frontend-handoff.md)
 
 ## 화면과 사용하는 API
 
@@ -11,7 +11,7 @@ React와 TypeScript로 만든 FocusLens 웹 화면입니다. 백엔드 API(`back
 | 로그인 | `/login` | `POST /api/auth/login` |
 | 회원가입 | `/register` | `POST /api/auth/register` |
 | 대시보드 | `/dashboard` | `GET /api/reports/weekly`, `GET /api/reports/monthly` |
-| 학습 세션 | `/session` | `POST /api/sessions/start`, `/:id/log`, `/:id/end`, `GET /api/sessions?status=IN_PROGRESS` |
+| 학습 세션 | `/session` | 로컬 AI의 `/start`·`/resume`·`/finish`·`/status`·`/preview`, 백엔드의 `GET /api/sessions?status=IN_PROGRESS` |
 | 리포트 | `/reports` | `GET /api/sessions?status=COMPLETED`, `GET /api/reports/:session_id`, `POST /api/session-shares` |
 | 피드 | `/feed` | `GET /api/session-shares/feed`, `POST·DELETE /api/session-shares/:id/reactions` |
 | 랭킹 | `/rankings` | `GET /api/rankings` |
@@ -80,17 +80,11 @@ React와 TypeScript로 만든 FocusLens 웹 화면입니다. 백엔드 API(`back
 - 내보내기와 방장 넘기기는 한 번 더 확인한 뒤 실행합니다.
 - 멤버 현황의 학습 기록은 그룹 가입 이후가 아니라 전체 기간 누적이고, "그룹 데이터 공유"를 끈 멤버는 0으로 나옵니다(서버 계산 방식).
 
-## 아직 더미인 부분
+## 세션 측정과 복구
 
-| 위치 | 현재 | 바뀔 내용 |
-| --- | --- | --- |
-| `SessionPage.tsx`의 `sendDummyLog` | gaze·blink·head 점수를 `Math.random()`으로 만들고 `face_detected: true`를 고정 전송 | AI 측정값으로 교체. 점수를 누가 계산·전송할지(브라우저 또는 `ai/` Python 프로그램)는 팀 결정 대기 |
-| 같은 함수의 total 계산 | `gaze × 0.3 + blink × 0.5 + head × 0.2` (백엔드 `focusScore.js`와 동일) | AI 연동 후에도 백엔드 계산식과 같게 유지 |
-| 세션 화면 웹캠 | 화면에 보여주기만 하고 분석에는 쓰지 않음 | AI 연동 방식이 정해지면 연결 |
+로그인 후 [세션 시작]을 누르면 로컬 AI가 컴퓨터의 카메라를 엽니다. 처음 3초 동안 화면 중앙을 바라보세요. 보정 후 유효한 1분의 측정이 끝날 때마다 시선·눈·머리 점수와 판정이 표시됩니다. 점수 가중치는 시선 30%, 눈 50%, 머리 20%입니다. [웹캠 숨기기]를 눌러도 측정은 계속됩니다.
 
-현재 화면의 더미 로그는 v1 API(`POST /api/sessions/:id/log`)로 1분마다 보냅니다. 실제 AI 도구는 v2를 사용하며, 프런트 통합에서는 전송 주체를 하나로 정해 중복 발송을 막아야 합니다.
-
-실제 카메라 집계·큐·v2 전송은 백엔드의 별도 `local:ai` 도구에 연결돼 있습니다. 같은 계정에서 CLI가 측정 중일 때 이 화면으로 이어하기·종료하기를 실행하면 더미 로그 충돌이나 미전송 로그 누락이 생길 수 있습니다. CLI가 전송·종료를 마친 뒤 리포트에서 결과를 확인합니다. 화면과 실제 AI의 종합 연결은 후속 프런트 통합 작업입니다.
+로컬 AI가 완성된 분을 SQLite에 보관하고 v2 로그로 전송합니다. [세션 종료]를 누르면 전송을 마친 뒤 리포트를 생성합니다. 화면 연결이 약 90초 동안 끊기면 카메라 측정을 멈춥니다. 같은 계정으로 세션 화면을 다시 열어 [이어하기] 또는 [종료하기]를 누를 수 있습니다. 다른 도구에서 연 세션은 해당 도구에서 마무리합니다. [연결·복구 절차](../docs/frontend-handoff.md)
 
 ## 기획서와 다르게 한 부분
 
@@ -99,7 +93,7 @@ React와 TypeScript로 만든 FocusLens 웹 화면입니다. 백엔드 API(`back
 | 대시보드 최근 세션 카드 목록 | 없음 | 리포트 화면의 세션 목록과 겹침 |
 | 리포트 "다음 학습 시작" / "대시보드로" 버튼 | 없음 | 위쪽 메뉴와 대시보드 고정 버튼으로 대신함 |
 | 이탈 시 소리 **또는 진동** | 소리만 | 진동은 iPhone(Safari)에서 지원하지 않아 제외 |
-| 눈 감지 시 팝업 가이드 | 이탈 연속 시 팝업만 | 눈 감음 신호는 AI 연동 후 추가 |
+| 눈 감지 시 팝업 가이드 | 연속 이탈 시 팝업 | 현재 안내는 분당 이탈 판정을 사용 |
 | 글꼴 Noto Sans KR / Inter | 기기 기본 글꼴 | 별도 글꼴을 받지 않고 시스템 글꼴 사용 |
 | 버튼·입력칸 모서리 12px | 8px (카드는 12px) | 디자인 판단으로 유지 |
 | 회원가입 후 바로 사용 | 로그인 화면으로 이동 | 아래 "설계상 결정" 참고 |
@@ -107,7 +101,6 @@ React와 TypeScript로 만든 FocusLens 웹 화면입니다. 백엔드 API(`back
 ## 미구현
 
 - **백엔드 API가 없어 대기:** 세션 일시정지, 비밀번호 찾기, 알림 설정
-- FE-3에서 세션 화면과 AI 도구의 실측 점수·상태·카메라 보정을 연결합니다.
 
 ## 백엔드에 요청한 API
 
@@ -132,7 +125,6 @@ React와 TypeScript로 만든 FocusLens 웹 화면입니다. 백엔드 API(`back
 
 아래 항목은 후속 검증 대상입니다.
 
-- **프런트와 실제 카메라의 종합 연결:** 별도 `local:ai`의 실제 2분 측정·복구는 LBE-4에서 통과했지만 이 화면과 함께 동작하는 제품 E2E는 후속 작업입니다.
 - **Roll-up 안내:** 로컬은 `ROLLUP_ENABLED=false`이고 시드 데이터에 30일 지난 세션이 없어서, 합쳐진 데이터로 안내가 뜨는 장면은 확인하지 못했습니다. 코드는 `docs/frontend-api-map.md` 2절의 `granularity` 규칙을 따릅니다.
 - **목록 페이지네이션:** 추가 페이지가 있는 데이터에서 리포트·소셜 목록의 더 보기를 확인합니다.
 - **제품 전체 검증:** FE-4에서 실제 측정·복구 흐름과 반응형·접근성을 확인합니다. [제품 E2E 시나리오](../docs/product-e2e-scenarios.md)
@@ -157,7 +149,16 @@ Node.js 22.x(22.13 이상)와 Docker Desktop이 필요합니다. `local:up`이 D
 
 `http://localhost:3000/health`가 200이면 준비된 것입니다.
 
-### 2. 프론트엔드 실행
+### 2. 로컬 AI와 프런트엔드 실행
+
+AI 의존성이 설치된 Python 3.11 환경을 준비한 뒤, 저장소 루트에서 별도 터미널로 AI를 실행합니다. 아래 경로는 프로젝트의 `.local/ai-venv`에 가상환경을 만든 경우입니다. 기존 Face Landmarker 모델을 사용하려면 `FOCUSLENS_MODEL_PATH`에 파일 경로를 지정합니다. [최초 설치와 카메라 설정](../docs/frontend-handoff.md)
+
+```bash
+export FOCUSLENS_AI_PYTHON="$PWD/.local/ai-venv/bin/python"
+npm run local:ai:web
+```
+
+다른 터미널에서 프런트를 실행합니다.
 
 ```bash
 cd frontend
@@ -187,9 +188,9 @@ npm run dev -- --host localhost --port 5173 --strictPort
 
 브라우저 하나에는 로그인이 하나뿐이라, 계정 여러 개는 일반 창·시크릿 창·다른 브라우저로 나눠 씁니다.
 
-### 4. 알림·팝업 테스트 (개발용)
+### 4. 측정 연결 검증
 
-더미 점수는 무작위라 이탈 상태가 연속으로 잘 나오지 않습니다. `http://localhost:5173/session?forceDistracted`로 접속하면 점수를 30점 이하로만 보내서, 2분 뒤 알림음과 안내 팝업을 확인할 수 있습니다. `npm run dev`에서만 동작하고 배포 빌드에서는 무시됩니다.
+저장소 루트에서 `npm run verify:fe3`를 실행하면 격리된 브라우저·API·AI 실행기에서 테스트 카메라 입력으로 세션 시작·복구·종료와 점수 표시를 확인합니다. 개발 서버의 `/session?forceDistracted`에서는 완성된 분마다 이탈 알림을 시험할 수 있습니다. 점수 게이지·저장 로그·리포트에는 실제 측정값이 표시됩니다.
 
 ### 5. 소셜·그룹 핵심 흐름 테스트
 
@@ -225,6 +226,7 @@ Access Token 수명이 1시간이라, 개발자 도구(F12) → Application에�
 | 이름 | 설명 | 기본값 |
 | --- | --- | --- |
 | `VITE_API_BASE_URL` | 백엔드 API 주소 | `http://localhost:3000` |
+| `VITE_LOCAL_AI_ORIGIN` | 로컬 AI의 HTTP 루프백 주소 | `http://127.0.0.1:4317` |
 
 - `npm run dev`는 `.env.development`, `npm run build`는 `.env.production`을 읽습니다. `.env` 파일을 바꾸면 개발 서버를 다시 시작해야 합니다.
 - 실제 `.env.*` 파일은 루트 `.gitignore`에 따라 커밋하지 않고, `.env.example`만 커밋합니다.
@@ -240,7 +242,8 @@ frontend/
     ├── main.tsx
     ├── App.tsx            # 라우팅, 네비게이션 바, 로그아웃
     ├── ProtectedRoute.tsx # 토큰이 없으면 /login으로 이동
-    ├── api.ts             # 모든 API 요청이 거치는 공통 함수
+    ├── api.ts             # 백엔드 요청 및 인증 갱신
+    ├── localAi.ts         # 로컬 AI 세션 제어·상태·미리보기
     ├── friends.ts         # 친구 관계 불러오기, 친구 요청 보내기
     ├── groups.ts          # 그룹 타입·역할 이름, 멤버 명단 불러오기
     ├── index.css          # Tailwind와 디자인 토큰(@theme), 인쇄 설정
@@ -254,13 +257,13 @@ frontend/
 ## 설계상 결정 사항
 
 **공통 API 클라이언트 (`src/api.ts`)**
-- 모든 요청은 `apiFetch(path, options)`를 씁니다. 주소, `Authorization` 헤더, 쿠키 전송(`credentials: 'include'`)을 자동으로 처리합니다.
+- 백엔드 요청은 `apiFetch(path, options)`에서 주소, Bearer 헤더와 쿠키 전송을 처리합니다. 로컬 AI 요청에는 Bearer만 보내고 인증 갱신은 백엔드 API에 보냅니다.
 - **401:** Refresh Token(HttpOnly 쿠키)으로 한 번 갱신한 뒤 원래 요청을 한 번 다시 보냅니다. Refresh Token이 무효(만료·폐기)일 때만 `/login?expired=true`로 이동합니다(`docs/auth-flow.md` 7절). 서버 장애(5xx)나 네트워크 끊김으로 갱신하지 못하면 로그아웃하지 않고 화면에 오류 문구를 보여 줍니다. 잠깐의 장애로 로그인이 풀리지 않게 하기 위해서입니다. 여러 요청이 동시에 401을 받아도 갱신은 한 번만 합니다. 같은 Refresh Token을 두 번 쓰면 서버가 재사용으로 판단해 로그인 전체를 폐기하기 때문입니다.
 - 로그인·회원가입·로그아웃은 `skipAuthRefresh: true`로 갱신을 건너뜁니다. 여기서 받는 401은 만료가 아니라 인증 실패이기 때문입니다.
 - **오류 문구:** `getErrorMessage()`가 상태 코드별 문구를 만듭니다. 400·409는 서버 문구를 그대로 쓰고, 403은 권한 안내를, 500·503은 `X-Request-ID`를 함께 보여줍니다(`docs/frontend-api-map.md` 2·3절). 데이터를 불러오는 화면에는 [다시 시도] 버튼이 있습니다.
 
 **화면 동작**
-- 회원가입 후에는 **자동 로그인하지 않고** 로그인 화면으로 이동합니다. 서버 응답에 토큰이 들어 있지만 일부러 쓰지 않습니다(`docs/frontend-api-map.md` 회원가입 항목과 다름).
-- 세션 화면에 들어오거나, 시작할 때 409를 받으면 서버에 남아 있는 진행 중 세션을 **이어하기 / 종료하기** 중에서 고를 수 있습니다. 이어하기는 서버 `started_at` 기준으로 타이머를 맞춥니다. 일시정지가 없어서 자리를 비운 시간도 학습 시간에 포함됩니다.
+- 회원가입 후에는 **자동 로그인하지 않고** 로그인 화면으로 이동합니다. 사용자는 방금 만든 계정으로 로그인합니다.
+- 진행 중인 본인 AI 세션을 다시 열면 화면과 타이머를 복원합니다. 경과 시간은 서버의 `started_at`부터 계산하므로 카메라가 일시 중단된 시간도 포함됩니다.
 - 평균 점수 등이 `null`이면 0이 아니라 "기록 없음"으로 표시합니다(`docs/frontend-api-map.md` 2절). 차트에서도 기록 없는 날은 0으로 그리지 않고 건너뜁니다.
 - Chart.js 차트는 부모에 고정 높이(`h-64`)를 주고 `maintainAspectRatio: false`를 씁니다. 이렇게 하지 않으면 좁은 화면에서 가로로 넘칩니다.

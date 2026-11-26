@@ -8,19 +8,60 @@ without manufacturing samples for the missing time. No partial window is sent.
 """
 from __future__ import annotations
 
+import fcntl
 import os
+from contextlib import contextmanager
 from pathlib import Path
 from time import monotonic_ns, time_ns
 
-from ai2_scoring import AI_ROOT, Calibration, ScoredMinute, timestamp
+from ai2_scoring import AI_ROOT, Calibration, InsufficientCalibrationSamples, ScoredMinute, timestamp
 from focuslens_ai.config import DEFAULT_CONFIG
+from local_ai import LocalAIError
 
 
 WINDOW_MS = DEFAULT_CONFIG.aggregation.interval_ms
 
 
+@contextmanager
+def _camera_lease(index):
+    # The CLI and the browser adapter may have separate queues but share a device.
+    directory = AI_ROOT.parent / ".local" / "ai"
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with (directory / f"camera-{index}.lock").open("a") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise LocalAIError("camera_in_use") from None
+        yield
+
+
+class _PreviewRunner:
+    """Publish a small in-memory preview of the exact frame used for inference."""
+    def __init__(self, runner, publish):
+        self.runner = runner
+        self.publish = publish
+        self.next_frame_ms = 0
+
+    def detect(self, frame, timestamp_ms):
+        try:
+            result = self.runner.detect(frame, timestamp_ms)
+        except Exception:
+            raise LocalAIError("camera_inference_failed") from None
+        if timestamp_ms >= self.next_frame_ms:
+            import cv2
+            height, width = frame.shape[:2]
+            if width > 480:
+                frame = cv2.resize(frame, (480, max(1, height * 480 // width)), interpolation=cv2.INTER_AREA)
+            success, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 65])
+            if success:
+                self.publish(encoded.tobytes())
+            self.next_frame_ms = timestamp_ms + 200
+        return result
+
+
 class ContinuousMinutes:
-    def __init__(self, utc_offset_ms, on_minute, on_event=lambda _event: None, minutes=0):
+    def __init__(self, utc_offset_ms, on_minute, on_event=lambda _event: None, minutes=0,
+                 retry_calibration=False):
         if isinstance(utc_offset_ms, bool) or not isinstance(utc_offset_ms, int):
             raise ValueError("utc_offset_ms must be integer milliseconds")
         if isinstance(minutes, bool) or not isinstance(minutes, int) or minutes < 0:
@@ -32,6 +73,7 @@ class ContinuousMinutes:
         self.on_event = on_event
         self.minutes = minutes
         self.calibration = Calibration()
+        self.retry_calibration = retry_calibration
         self.baseline = None
         self.minute = None
         self.last_ms = None
@@ -73,7 +115,15 @@ class ContinuousMinutes:
 
         if self.baseline is None:
             if self.calibration.observe(frame):
-                self.baseline = self.calibration.baseline()
+                try:
+                    self.baseline = self.calibration.baseline()
+                except InsufficientCalibrationSamples:
+                    if not self.retry_calibration:
+                        raise
+                    self.on_event({"event": "calibration_retry", "samples": len(self.calibration.frames)})
+                    self.calibration = Calibration()
+                    self.calibration.observe(frame)
+                    return False
                 self.calibration_samples = len(self.calibration.frames)
                 # Release calibration frame features once the baseline is known.
                 self.calibration = None
@@ -137,34 +187,58 @@ class ContinuousMinutes:
         return dict(self._stats)
 
 
+@contextmanager
+def _camera_step(browser, code):
+    try:
+        yield
+    except Exception:
+        if browser:
+            raise LocalAIError(code) from None
+        raise
+
+
 def collect_camera(on_minute, minutes=0, camera_index=0, stop_event=None,
-                   on_event=lambda _event: None):
+                   on_event=lambda _event: None, on_preview=None, retry_calibration=False):
     """Collect real webcam data; caller controls signals and owns the outbox."""
     if isinstance(camera_index, bool) or not isinstance(camera_index, int) or camera_index < 0:
         raise ValueError("camera_index must be a nonnegative integer")
     collector = ContinuousMinutes(
-        (time_ns() - monotonic_ns()) // 1_000_000, on_minute, on_event, minutes,
+        (time_ns() - monotonic_ns()) // 1_000_000, on_minute, on_event, minutes, retry_calibration,
     )
     if stop_event is not None and stop_event.is_set():
         return collector.finish()
     # Heavy camera imports stay lazy so status/login, cancelled capture and pure
     # aggregation tests do not initialize a camera or MediaPipe.
-    from focuslens_ai.camera import WebcamPipeline
-    from focuslens_ai.mediapipe_runner import FaceLandmarkerRunner
-    from focuslens_ai.model_store import ensure_model
+    browser = on_preview is not None
+    with _camera_step(browser, "camera_dependencies_unavailable"):
+        from focuslens_ai.camera import WebcamPipeline
+        from focuslens_ai.mediapipe_runner import FaceLandmarkerRunner
+        from focuslens_ai.model_store import ensure_model
 
     model_path = Path(os.environ.get("FOCUSLENS_MODEL_PATH",
                                      AI_ROOT.parent / ".local" / "ai" / "models" / "face_landmarker.task"))
     on_event({"event": "calibration_started", "duration_ms": 3000})
-    with FaceLandmarkerRunner(ensure_model(model_path)) as runner:
-        pipeline = WebcamPipeline(runner, DEFAULT_CONFIG, camera_index=camera_index, preview=False)
+    with _camera_lease(camera_index):
+        with _camera_step(browser, "model_unavailable"):
+            landmarker = FaceLandmarkerRunner(ensure_model(model_path))
+        with landmarker as runner:
+            if browser:
+                runner = _PreviewRunner(runner, on_preview)
+            pipeline = WebcamPipeline(runner, DEFAULT_CONFIG, camera_index=camera_index, preview=False)
 
-        def on_measurement(frame):
-            if stop_event is not None and stop_event.is_set():
-                pipeline.stop()
-                return
-            if collector.observe(frame):
-                pipeline.stop()
+            def on_measurement(frame):
+                if stop_event is not None and stop_event.is_set():
+                    pipeline.stop()
+                    return
+                if collector.observe(frame):
+                    pipeline.stop()
 
-        pipeline.run(on_measurement)
+            try:
+                pipeline.run(on_measurement)
+            except RuntimeError as error:
+                if browser and str(error) == f"카메라 {camera_index}번을 열 수 없습니다.":
+                    raise LocalAIError("camera_open_failed") from None
+                if browser and str(error) == "웹캠 프레임을 읽지 못했습니다.":
+                    raise LocalAIError("camera_read_failed") from None
+                raise
     return collector.finish()

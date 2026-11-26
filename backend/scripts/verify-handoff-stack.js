@@ -1,4 +1,4 @@
-// LBE-5 HTTP checks and FE-2 browser checks both run on a disposable Compose project.
+// The HTTP, browser and local AI bridge checks each own a disposable Compose project.
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
@@ -29,6 +29,20 @@ function frontendOrigin(value) {
     && url.port && !url.username && !url.password && url.pathname === '/'
     && !url.search && !url.hash, 'LOCAL_FRONTEND_ORIGIN must be an explicit loopback HTTP origin with a port');
   return url.origin;
+}
+
+async function cameraProgress(directory) {
+  try {
+    const record = JSON.parse(await fs.readFile(path.join(directory, 'fe3-live-progress.json'), 'utf8'));
+    const stages = ['opening_camera', 'calibration_started', 'calibration_retry', 'calibration_completed',
+      'camera_measurement_started', 'minute_completed', 'minute_skipped'];
+    if (!stages.includes(record.stage)) return null;
+    const summary = { camera_stage: record.stage };
+    for (const key of ['calibration_samples', 'minute_samples']) {
+      if (Number.isSafeInteger(record[key]) && record[key] >= 0) summary[key] = record[key];
+    }
+    return summary;
+  } catch { return null; }
 }
 
 async function availableBrowserOrigin() {
@@ -100,14 +114,16 @@ async function command(program, args, { env, operation, signal, timeoutMs = 600_
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes('--help') || args.includes('-h')) {
-    console.log('Usage: node backend/scripts/verify-handoff-stack.js [--browser]');
+    console.log('Usage: node backend/scripts/verify-handoff-stack.js [--browser | --fe3 [--live]]');
     console.log('Builds a separate local stack, seeds it, checks frontend API contracts, and removes only its own resources.');
     console.log('HTTP mode uses LOCAL_FRONTEND_ORIGIN (default http://localhost:5173). Browser mode uses two temporary loopback ports.');
     return;
   }
-  const browserMode = args.length === 1 && args[0] === '--browser';
-  assert.ok(browserMode || args.length === 0, 'Expected no arguments or --browser.');
-  const label = browserMode ? 'FE-2 isolated browser checks' : 'LBE-5 isolated handoff checks';
+  const bridgeMode = args[0] === '--fe3' && (args.length === 1 || (args.length === 2 && args[1] === '--live'));
+  const browserMode = bridgeMode || (args.length === 1 && args[0] === '--browser');
+  assert.ok(browserMode || args.length === 0, 'Expected no arguments, --browser, or --fe3 [--live].');
+  const label = bridgeMode ? 'FE-3 isolated AI bridge checks'
+    : browserMode ? 'FE-2 isolated browser checks' : 'LBE-5 isolated handoff checks';
   const origin = frontendOrigin(browserMode ? await availableBrowserOrigin()
     : process.env.LOCAL_FRONTEND_ORIGIN || 'http://localhost:5173');
   const project = `focuslens-handoff-${randomUUID()}`;
@@ -144,6 +160,7 @@ async function main() {
     '-U', 'focuslens', '-d', 'focuslens', '-Atc', query], 'Verify isolated database', { timeoutMs: 30_000 });
   const heartbeat = setInterval(() => console.log(JSON.stringify({ stage, waiting: true })), 30_000);
   heartbeat.unref?.();
+  let progressTimer;
   try {
     await ensureLocalEnv({ repoRoot, envFile: env.LOCAL_ENV_FILE });
     controller.signal.throwIfAborted();
@@ -162,14 +179,47 @@ async function main() {
     const address = await composeRun(['port', 'backend', '3000'], 'Find isolated API port', { timeoutMs: 30_000 });
     assert.match(address, /^127\.0\.0\.1:\d+$/, 'Verification API must bind to an isolated loopback port');
     const verifyEnv = { ...env, LOCAL_VERIFY_URL: `http://${address}` };
-    progress(browserMode ? 'verify_browser_auth_privacy_groups' : 'verify_frontend_cookie_privacy_and_group_contracts');
+    progress(bridgeMode ? 'verify_browser_camera_queue_and_report'
+      : browserMode ? 'verify_browser_auth_privacy_groups' : 'verify_frontend_cookie_privacy_and_group_contracts');
     const verifier = browserMode ? 'verify-frontend-browser.cjs' : 'verify-frontend-handoff.js';
-    const checked = await command(process.execPath, [path.join(__dirname, verifier)], {
+    const verifierArgs = bridgeMode ? args : [];
+    if (bridgeMode && args.includes('--live')) {
+      let previous = '';
+      progressTimer = setInterval(async () => {
+        const summary = await cameraProgress(temporary);
+        const current = JSON.stringify(summary);
+        if (summary && current !== previous) console.log(current);
+        previous = current;
+      }, 1000);
+      progressTimer.unref();
+    }
+    const checked = await command(process.execPath, [path.join(__dirname, verifier), ...verifierArgs], {
       env: verifyEnv, operation: label, signal: controller.signal, timeoutMs: browserMode ? 300_000 : 180_000,
     });
     try { apiSummary = publicSummary(JSON.parse(checked.output || checked.diagnostics)); }
     catch (_error) { throw new Error('Frontend checks did not return a JSON summary.'); }
     if (checked.code !== 0) throw new Error(label + ' failed.');
+    if (bridgeMode) {
+      progress('verify_persisted_session_log_and_report');
+      const measurement = apiSummary.checks.measurement;
+      // IDs originate in browser responses. Validate before using them in this test query.
+      for (const id of [measurement.session_id, measurement.client_log_id, measurement.report_id]) {
+        assert.match(id, /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i);
+      }
+      const db = JSON.parse(await sql(`SELECT json_build_object(
+        'status', s.status, 'log_count', (SELECT count(*) FROM concentration_logs WHERE session_id = s.id),
+        'report_count', (SELECT count(*) FROM reports WHERE session_id = s.id),
+        'score', l.focus_score, 'report_score', (r.summary_json->>'avg_focus_score')::float,
+        'measured_ms', round(extract(epoch FROM l.measured_at AT TIME ZONE 'UTC') * 1000))
+        FROM sessions s JOIN concentration_logs l ON l.session_id = s.id JOIN reports r ON r.session_id = s.id
+        WHERE s.id = '${measurement.session_id}' AND l.client_log_id = '${measurement.client_log_id}'
+          AND r.id = '${measurement.report_id}'`));
+      assert.deepEqual(db, {
+        status: 'COMPLETED', log_count: 1, report_count: 1, score: measurement.score,
+        report_score: measurement.score, measured_ms: Date.parse(measurement.measured_at),
+      }, 'Expected the original measured minute and one completed report in PostgreSQL.');
+      measurement.postgres_verified = true;
+    }
     result = {
       result: label + ' passed', frontend_origin: origin,
       migrations, query_views: views, seed_completed: true,
@@ -180,6 +230,7 @@ async function main() {
       ...(apiSummary && { [browserMode ? 'browser_checks' : 'api_checks']: apiSummary }) };
   } finally {
     clearInterval(heartbeat);
+    clearInterval(progressTimer);
     if (resourcesMayExist) {
       try {
         // Cleanup deliberately ignores the aborted work signal and cannot select
@@ -211,4 +262,4 @@ if (require.main === module) main().catch(() => {
   process.exitCode = 1;
 });
 
-module.exports = { frontendOrigin, publicSummary };
+module.exports = { frontendOrigin, publicSummary, cameraProgress };

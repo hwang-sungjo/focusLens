@@ -130,7 +130,9 @@ curl --fail http://localhost:3000/health
 
 ### 일반 로컬 서버에 연속 측정 연결
 
-별도 백엔드 실행 도구가 기존 AI의 카메라·3초 보정·1분 집계를 재사용해 SQLite 영속 큐와 로그 v2를 연결합니다. 기존 `focuslens-ai` 명령은 계속 프레임 측정 도구로 사용할 수 있습니다. 아래는 macOS의 키체인을 사용하는 실행 절차입니다. Python 3.11과 카메라가 필요합니다.
+브라우저의 세션 버튼을 사용하려면 API와 프런트를 기동하고, Python 3.11 AI 환경에서 별도 터미널로 `npm run local:ai:web`을 실행합니다. 허용된 로컬 프런트 주소와 카메라 보정·이어하기·종료 절차는 [프런트 인계](frontend-handoff.md)를 참조하세요.
+
+아래는 CLI로 직접 측정할 때의 절차입니다. `local:ai`는 macOS 키체인을 사용합니다. 두 실행 경로 모두 기존 AI의 카메라·3초 보정·1분 집계를 재사용하고 SQLite 큐를 통해 로그 v2를 전송합니다.
 
 ```bash
 npm run local:up

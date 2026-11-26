@@ -74,6 +74,7 @@ let refreshing: Promise<RefreshResult> | null = null
 
 function refreshAccessToken(): Promise<RefreshResult> {
   if (!refreshing) {
+    const user = localStorage.getItem('user_id')
     refreshing = (async (): Promise<RefreshResult> => {
       try {
         const res = await fetch(`${BASE_URL}/api/auth/refresh`, {
@@ -84,7 +85,7 @@ function refreshAccessToken(): Promise<RefreshResult> {
           const result = await readJson(res)
           const token = result?.data?.access_token
           if (!token) return { kind: 'unavailable', status: res.status, requestId: null }
-          localStorage.setItem('access_token', token)
+          if (localStorage.getItem('user_id') === user) localStorage.setItem('access_token', token)
           return { kind: 'ok' }
         }
         // 400·401·403: Refresh Token 자체가 무효 → 재로그인
@@ -102,19 +103,24 @@ function refreshAccessToken(): Promise<RefreshResult> {
   return refreshing
 }
 
-export async function apiFetch(path: string, options: ApiOptions = {}): Promise<Response> {
-  // skipAuthRefresh는 fetch가 모르는 옵션이라 따로 빼낸다
-  const { skipAuthRefresh, ...init } = options
-  const res = await send(path, init)
+// 로컬 AI도 같은 Access Token을 쓴다. 쿠키 갱신은 위의 백엔드 주소에서만 한다.
+export async function withAuthRefresh(request: () => Promise<Response>, skipAuthRefresh = false): Promise<Response> {
+  const user = localStorage.getItem('user_id')
+  const token = localStorage.getItem('access_token')
+  const res = await request()
 
-  if (res.status !== 401 || skipAuthRefresh) {
+  if (res.status !== 401 || skipAuthRefresh || localStorage.getItem('user_id') !== user) {
     return res
   }
 
+  // 다른 요청이 이미 쿠키를 회전했으면 새 Access Token으로 한 번만 재시도한다.
+  if (localStorage.getItem('access_token') !== token) return request()
+
   // 401 → 갱신 1회 시도
   const refreshed = await refreshAccessToken()
+  if (localStorage.getItem('user_id') !== user) return res
   if (refreshed.kind === 'ok') {
-    return send(path, init) // 원 요청 1회 재시도
+    return request()
   }
 
   if (refreshed.kind === 'unavailable') {
@@ -134,4 +140,9 @@ export async function apiFetch(path: string, options: ApiOptions = {}): Promise<
   window.location.href = '/login?expired=true'
   // 이동하는 동안 호출한 화면이 에러 문구를 잠깐 띄우지 않도록 여기서 멈춘다
   return new Promise<Response>(() => {})
+}
+
+export function apiFetch(path: string, options: ApiOptions = {}): Promise<Response> {
+  const { skipAuthRefresh, ...init } = options
+  return withAuthRefresh(() => send(path, init), skipAuthRefresh)
 }

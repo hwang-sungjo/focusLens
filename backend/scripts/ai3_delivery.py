@@ -221,6 +221,10 @@ class DeliveryClient:
                                      headers={"Authorization": "Bearer " + tokens["access_token"]})
         if response.status_code != 401:
             return response
+        if not tokens.get("refresh_token"):
+            # Browser-owned credentials are refreshed by the web client using its
+            # HttpOnly cookie. Keep the immutable log pending until it reconnects.
+            raise DeliveryBlocked("authentication_required")
         fingerprint = hashlib.sha256(tokens["refresh_token"].encode()).hexdigest()
         with self._mutex:
             uncertain = self.db.execute("SELECT value FROM delivery_metadata WHERE name='refresh_in_flight'").fetchone()
