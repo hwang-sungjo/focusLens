@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { sendFriendRequest, type FriendStatus } from '../friends'
 
 // 다른 사람 옆에 붙이는 [+ 친구] 버튼 (피드·랭킹에서 사용)
-// 사용자 검색 API가 없어서, 피드·랭킹에 보이는 사람의 user_id로 바로 요청을 보낸다
 
 interface FriendButtonProps {
   userId: string
