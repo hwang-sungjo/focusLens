@@ -8,17 +8,15 @@ FE-1에서 로컬 백엔드·AI 측정 도구와 프런트 11개 화면을 `main
 
 ## 1. 실행 주소와 명령
 
-Node.js 22.x(22.13 이상)와 Docker Desktop이 필요하다. 명령은 저장소 루트에서 실행한다.
+Node.js 22.x(22.13 이상)를 설치하고 Docker Desktop을 실행한다. Mac에서 카메라 측정까지 사용하려면 Python 3.11도 준비한다. VS Code로 `focusLens` 폴더를 열고 **터미널 → 새 터미널**에서 실행한다.
 
 ```bash
-npm ci --prefix backend
-npm run local:up
-npm run local:seed
-npm ci --prefix frontend
-npm --prefix frontend run dev -- --host localhost --port 5173 --strictPort
+npm start
 ```
 
-`local:up`은 기존 환경 파일을 보존하고 DB·Redis 준비, 저장소 migration·조회 View 적용 후 API를 시작한다. `local:seed`는 선택적 테스트 계정 생성이며 기존 비밀번호·프로필을 초기화하지 않는다. `strictPort`는 5173이 사용 중일 때 5174로 자동 변경되는 것을 막는다.
+첫 실행은 프런트 패키지를 설치하고, Mac에서는 AI용 Python 가상환경과 패키지도 준비한다. 백엔드는 PostgreSQL·Redis를 준비하고 저장소의 migration과 조회 View를 적용한다. 이미 실행 중인 FocusLens 서비스는 재사용한다. Windows에서 같은 명령을 쓰면 프런트와 백엔드가 실행되고, 터미널에 카메라 측정 제한이 표시된다.
+
+준비가 끝나면 [로그인 화면](http://localhost:5173/login)을 연다. 새 환경에서는 회원가입하거나, 기본 테스트 계정이 필요하면 별도 터미널에서 `npm run local:seed`를 한 번 실행한다. 계정 목록은 아래 2절에 있다.
 
 | 대상 | 로컬 값 |
 | --- | --- |
@@ -33,7 +31,7 @@ npm --prefix frontend run dev -- --host localhost --port 5173 --strictPort
 
 프런트와 API의 호스트 이름은 모두 `localhost`로 맞춘다. `localhost`와 `127.0.0.1`을 섞으면 SameSite 쿠키 전달과 CORS가 달라질 수 있다. 별도 포트를 쓸 때는 `LOCAL_API_PORT`, `VITE_API_BASE_URL`, `LOCAL_CORS_ORIGIN`을 함께 맞추고 API 컨테이너와 Vite를 다시 시작한다. Compose에서는 `backend/.env`의 CORS 값보다 `LOCAL_CORS_ORIGIN` 설정이 우선한다.
 
-종료는 `npm run local:down`이며 볼륨을 유지한다. 기존 데이터 변경 전 `npm run local:backup`을 사용한다. 일상 기동·환경 맞춤에 `db:reset`이나 `docker compose down -v`를 사용하지 않는다.
+측정 중이면 먼저 화면에서 **세션 종료**를 누른다. `npm start`를 실행한 터미널에서 `Ctrl+C`를 누르면 이번에 시작한 서비스가 종료된다. 계정과 학습 기록은 DB 볼륨에 보존된다. 별도로 기동한 백엔드는 `npm run local:down`으로 종료할 수 있다.
 
 ## 2. 테스트 계정과 계정 분리
 
@@ -87,7 +85,7 @@ Refresh가 429를 제외한 4xx를 반환하면 저장한 인증 정보를 지�
 
 ## 5. 세션 화면에서 카메라 측정하기
 
-처음 한 번은 저장소 루트에서 Python 3.11 가상환경을 만들고 AI 패키지를 설치한다.
+`npm start`로 AI를 함께 실행했다면 아래의 **학습 세션 → 세션 시작** 단계로 이동한다. AI만 별도로 실행할 때는 저장소 루트에서 다음 명령으로 Python 3.11 가상환경과 AI 패키지를 준비한다.
 
 ```bash
 python3.11 -m venv .local/ai-venv

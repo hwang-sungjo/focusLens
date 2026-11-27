@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "start": "node backend/scripts/local-stack.js",
     "test": "jest",
     "verify:openapi": "cd backend && npm run verify:openapi",
     "verify:ai1": "bash backend/scripts/run-ai1.sh",
