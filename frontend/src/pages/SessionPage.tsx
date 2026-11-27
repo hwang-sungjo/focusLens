@@ -347,7 +347,10 @@ function SessionPage() {
             )}
           </div>
           {sessionStatus === 'in_progress' && !latestResult && (
-            <p className="text-xs text-secondary mt-1">첫 점수는 카메라 보정 후 1분을 측정하면 표시돼요.</p>
+            <p className="text-xs text-secondary mt-1">
+              첫 점수는 카메라 보정 후 1분을 측정하면 표시돼요.
+              1분 이하 측정 시에는 점수가 표시되지 않습니다.
+            </p>
           )}
 
           {/* Gaze/Blink/Head 미니 게이지 */}
