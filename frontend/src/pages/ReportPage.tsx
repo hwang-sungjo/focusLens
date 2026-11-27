@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Line } from 'react-chartjs-2'
 import { apiFetch, readJson, getErrorMessage } from '../api'
 import ShareDialog from '../components/ShareDialog'
@@ -186,6 +186,38 @@ async function loadSessionPage(pageNo: number): Promise<SessionPageResult> {
   } catch {
     return { ok: false, message: '서버에 연결할 수 없습니다.' }
   }
+}
+
+// 그래프 틀: 높이를 폭에 맞춰 정한다 (가로:세로 = 10:3).
+// 화면이 넓어져 상세 영역이 늘어나면 그래프 높이도 같이 커져서, 가로로만 납작하게 늘어나지 않는다.
+// 좁은 화면에서는 최소 256px(지금 높이), 아주 넓은 화면에서는 최대 640px에서 멈춘다.
+// CSS aspect-ratio 대신 폭을 재서 정수 높이를 주는 이유: 소수점 높이면 Chart.js가 크기를 계속 다시 맞추면서 그리기 애니메이션이 멈출 수 있다.
+const CHART_RATIO = 0.3
+const CHART_MIN_HEIGHT = 256
+const CHART_MAX_HEIGHT = 640
+
+function ChartBox({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [height, setHeight] = useState(CHART_MIN_HEIGHT)
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const observer = new ResizeObserver(([entry]) => {
+      const next = Math.round(
+        Math.min(CHART_MAX_HEIGHT, Math.max(CHART_MIN_HEIGHT, entry.contentRect.width * CHART_RATIO)),
+      )
+      setHeight((prev) => (prev === next ? prev : next))
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+
+  return (
+    <div ref={ref} className="relative w-full" style={{ height }}>
+      {children}
+    </div>
+  )
 }
 
 function ReportPage() {
@@ -410,7 +442,7 @@ function ReportPage() {
               {report.timeline.length === 0 ? (
                 <p className="text-sm text-secondary">기록된 데이터가 없습니다.</p>
               ) : (
-                <div className="relative w-full h-64">
+                <ChartBox>
                   <Line
                     data={{
                       labels: report.timeline.map(formatAxisLabel),
@@ -462,7 +494,7 @@ function ReportPage() {
                       scales: { y: { min: 0, max: 100 } },
                     }}
                   />
-                </div>
+                </ChartBox>
               )}
             </div>
 
