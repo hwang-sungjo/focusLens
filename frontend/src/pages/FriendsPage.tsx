@@ -6,7 +6,7 @@ import { sendFriendRequest } from '../friends'
 // 친구 화면 (GET /api/connections?include_pending=true, POST /api/connections/request, PATCH /api/connections/:id)
 // - 받은 요청: 수락(ACCEPTED) / 거절(REJECTED) — 받은 사람만 가능
 // - 보낸 요청: 취소(CANCELLED) — 보낸 사람만 가능
-// - 친구 찾기: 사용자 검색 API가 없어서 두 가지로 우회한다
+// - 친구 찾기: 가입 때 주어지는 고유 ID로 추가한다 (사용자 검색은 두지 않음)
 //   1) 피드·랭킹에서 [+ 친구] 버튼
 //   2) 내 ID를 복사해 친구에게 보내고, 친구의 ID를 받아 붙여넣기
 
