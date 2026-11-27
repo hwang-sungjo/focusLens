@@ -151,10 +151,9 @@ Node.js 22.x(22.13 이상)와 Docker Desktop이 필요합니다. `local:up`이 D
 
 ### 2. 로컬 AI와 프런트엔드 실행
 
-AI 의존성이 설치된 Python 3.11 환경을 준비한 뒤, 저장소 루트에서 별도 터미널로 AI를 실행합니다. 아래 경로는 프로젝트의 `.local/ai-venv`에 가상환경을 만든 경우입니다. 기존 Face Landmarker 모델을 사용하려면 `FOCUSLENS_MODEL_PATH`에 파일 경로를 지정합니다. [최초 설치와 카메라 설정](../docs/frontend-handoff.md)
+저장소의 `.local/ai-venv`에 Python 3.11 환경과 AI 패키지를 한 번 설치하면 새 터미널에서도 실행기가 해당 환경을 선택합니다. Face Landmarker 모델의 기본 경로는 `.local/ai/models/face_landmarker.task`입니다. 다른 경로를 사용할 때는 `FOCUSLENS_AI_PYTHON`과 `FOCUSLENS_MODEL_PATH` 중 바꿀 항목에 절대 경로를 지정합니다. 저장소 루트에서 AI를 실행합니다. [최초 설치와 카메라 설정](../docs/frontend-handoff.md)
 
 ```bash
-export FOCUSLENS_AI_PYTHON="$PWD/.local/ai-venv/bin/python"
 npm run local:ai:web
 ```
 

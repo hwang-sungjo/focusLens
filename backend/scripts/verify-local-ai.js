@@ -6,6 +6,7 @@ const { once } = require('node:events');
 const fs = require('node:fs/promises');
 const http = require('node:http');
 const path = require('node:path');
+const { defaultAiPython } = require('./local-ai-python');
 
 const repoRoot = path.resolve(__dirname, '../..');
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
@@ -258,7 +259,7 @@ async function main() {
     if (config.resumeEvidence) token = await currentAccessToken();
 
     const runWorker = async (action, expectedCode, timeoutMs = 90_000) => {
-      const python = process.env.FOCUSLENS_AI_PYTHON || process.env.AI3_PYTHON || process.env.AI2_PYTHON || 'python3.11';
+      const python = process.env.FOCUSLENS_AI_PYTHON || process.env.AI3_PYTHON || process.env.AI2_PYTHON || defaultAiPython();
       const workerEnv = { ...env };
       for (const key of Object.keys(workerEnv)) {
         if (/TOKEN|PASSWORD|JWT_SECRET|DATABASE_URL|REDIS_URL|PG_PASSWORD/.test(key)) delete workerEnv[key];

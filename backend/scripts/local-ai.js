@@ -1,8 +1,9 @@
 const { spawn } = require('node:child_process');
 const path = require('node:path');
 const { constants } = require('node:os');
+const { defaultAiPython } = require('./local-ai-python');
 
-const python = process.env.FOCUSLENS_AI_PYTHON || process.env.AI3_PYTHON || process.env.AI2_PYTHON || 'python3.11';
+const python = process.env.FOCUSLENS_AI_PYTHON || process.env.AI3_PYTHON || process.env.AI2_PYTHON || defaultAiPython();
 const web = process.argv[2] === '--web';
 const script = web ? 'local_ai_web.py' : 'local_ai.py';
 const child = spawn(python, ['-B', path.join(__dirname, script), ...process.argv.slice(web ? 3 : 2)], {

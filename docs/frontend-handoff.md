@@ -87,16 +87,22 @@ Refresh가 429를 제외한 4xx를 반환하면 저장한 인증 정보를 지�
 
 ## 5. 세션 화면에서 카메라 측정하기
 
-백엔드와 Vite를 실행한 상태에서 별도 터미널을 열고 저장소 루트에서 아래 명령을 실행한다. 처음 한 번은 Python 3.11 가상환경에 AI 패키지를 설치한다.
+처음 한 번은 저장소 루트에서 Python 3.11 가상환경을 만들고 AI 패키지를 설치한다.
 
 ```bash
 python3.11 -m venv .local/ai-venv
 .local/ai-venv/bin/python -m pip install -e ./ai
-export FOCUSLENS_AI_PYTHON="$PWD/.local/ai-venv/bin/python"
+```
+
+시연용 Mac에는 Python 3.11.18이 `.local/python-3.11/bin/python3.11`에 설치되어 있다. 이 컴퓨터에서 가상환경을 다시 만들 때는 위 첫 명령의 `python3.11` 자리에 이 경로를 쓴다.
+
+백엔드와 Vite가 실행 중이면 새 터미널을 열고 저장소 루트에서 AI를 기동한다. 실행기는 기본으로 `.local/ai-venv/bin/python`을 선택한다. 다른 Python 환경을 사용하려면 `FOCUSLENS_AI_PYTHON`에 해당 실행 파일의 절대 경로를 지정한다.
+
+```bash
 npm run local:ai:web
 ```
 
-처음 측정할 때 Face Landmarker 모델을 `.local/ai/models/face_landmarker.task`에 준비한다. 기존 모델을 사용하려면 실행 전에 `FOCUSLENS_MODEL_PATH`에 해당 파일 경로를 지정한다. macOS에서 카메라 권한을 요청하면 Python을 실행한 앱에 허용한다. 주소를 바꾼 환경은 `--base-url`에 로컬 API 주소, `--frontend-origin`에 실제 프런트 주소를 넘긴다. AI 포트를 바꾸면 `--port`와 `VITE_LOCAL_AI_ORIGIN`을 함께 변경한다.
+기본 모델 경로는 `.local/ai/models/face_landmarker.task`다. 파일이 있으면 다음 측정에도 재사용하고, 없으면 첫 측정 시 내려받는다. 다른 위치의 모델을 사용하려면 실행 전에 `FOCUSLENS_MODEL_PATH`에 파일의 절대 경로를 지정한다. macOS에서 카메라 권한을 요청하면 Python을 실행한 앱에 허용한다. 주소를 바꾼 환경은 `--base-url`에 로컬 API 주소, `--frontend-origin`에 실제 프런트 주소를 넘긴다. AI 포트를 바꾸면 `--port`와 `VITE_LOCAL_AI_ORIGIN`을 함께 변경한다.
 
 1. 브라우저에서 로그인하고 **학습 세션 → 세션 시작**을 누른다. Python이 컴퓨터의 카메라를 열면 처음 3초 동안 화면 중앙을 바라본다. 웹캠 숨기기는 화면의 미리보기만 끈다.
 2. 보정 후 유효한 1분 측정이 끝나면 점수·판정과 Gaze/Blink/Head가 표시된다. Python이 각 분을 SQLite에 저장한 뒤 v2로 전송한다. 소리와 연속 이탈 안내는 새 분의 판정을 받을 때 동작한다.

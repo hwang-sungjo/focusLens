@@ -130,15 +130,16 @@ curl --fail http://localhost:3000/health
 
 ### 일반 로컬 서버에 연속 측정 연결
 
-브라우저의 세션 버튼을 사용하려면 API와 프런트를 기동하고, Python 3.11 AI 환경에서 별도 터미널로 `npm run local:ai:web`을 실행합니다. 허용된 로컬 프런트 주소와 카메라 보정·이어하기·종료 절차는 [프런트 인계](frontend-handoff.md)를 참조하세요.
+브라우저의 세션 버튼을 사용하려면 API와 프런트를 기동한 뒤, 별도 터미널을 열어 저장소 루트에서 `npm run local:ai:web`을 실행합니다. 이 명령과 `npm run local:ai`는 기본으로 `.local/ai-venv/bin/python`을 선택합니다. 다른 Python 3.11 환경을 쓰려면 `FOCUSLENS_AI_PYTHON`에 실행 파일의 절대 경로를 지정합니다. [최초 설치와 브라우저 측정 절차](frontend-handoff.md)
 
 아래는 CLI로 직접 측정할 때의 절차입니다. `local:ai`는 macOS 키체인을 사용합니다. 두 실행 경로 모두 기존 AI의 카메라·3초 보정·1분 집계를 재사용하고 SQLite 큐를 통해 로그 v2를 전송합니다.
 
 ```bash
-npm run local:up
+# 최초 한 번 설치
 python3.11 -m venv .local/ai-venv
 .local/ai-venv/bin/python -m pip install -e './ai[dev]'
-export FOCUSLENS_AI_PYTHON="$PWD/.local/ai-venv/bin/python"
+
+npm run local:up
 npm run local:ai -- login --email user_a@focuslens.dev
 npm run local:ai -- measure --minutes 2
 ```

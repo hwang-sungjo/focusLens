@@ -4,9 +4,10 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const readline = require('node:readline');
 const { signUpAndLogin } = require('./fe2-auth.cjs');
+const { defaultAiPython } = require('../local-ai-python');
 
 async function startCompanion(mode, recoveryProxyOrigin) {
-  const python = process.env.FOCUSLENS_AI_PYTHON || process.env.AI3_PYTHON || 'python3.11';
+  const python = process.env.FOCUSLENS_AI_PYTHON || process.env.AI3_PYTHON || defaultAiPython();
   const file = path.resolve(__dirname, '../fe3_verify_bridge.py');
   const args = ['-B', file, mode];
   const env = { ...process.env };

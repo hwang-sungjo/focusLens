@@ -5,8 +5,20 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
+const { defaultAiPython } = require('../local-ai-python');
 
 const wrapper = path.resolve(__dirname, '../local-ai.js');
+
+test('an installed project interpreter is preferred over the Python 3.11 PATH fallback', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'focuslens-python-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  assert.equal(defaultAiPython(root), 'python3.11');
+  const bin = process.platform === 'win32' ? 'Scripts' : 'bin';
+  const python = path.join(root, '.local', 'ai-venv', bin, process.platform === 'win32' ? 'python.exe' : 'python');
+  await fs.mkdir(path.dirname(python), { recursive: true });
+  await fs.writeFile(python, '', { mode: 0o700 });
+  assert.equal(defaultAiPython(root), python);
+});
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   test(`the npm wrapper forwards ${signal} and waits for the camera child to close`, async t => {
